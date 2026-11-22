@@ -68,6 +68,7 @@ python3 tools/local-spark/run_phase2.py --lakehouse /tmp/lakehouse
 | `operations-agent/` | Business goals and instructions to paste into the operations agent |
 | `kql/05-agent-readiness.kql` | Column descriptions for the operations agent; optional table `GearboxVsFleetLive` |
 | `kql/93-data-agent-examples.kql` | The KQL example queries of the data agent |
+| `kql/94-twin-app-queries.kql` | The queries the functions of the Phase 4 app run, to run by hand |
 
 Everything in this table except `05-agent-readiness.kql` is generated. Change `tools/agent_spec.py` or `tools/build-phase3.py`, then run `python3 tools/build-phase3.py`.
 

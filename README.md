@@ -2,7 +2,7 @@
 
 An end-to-end demo that starts at a wind farm's edge server and ends in a live 3D digital twin with agents, built in phases. It reconstructs, from scratch, the kind of solution shown in Microsoft's "real-time 3D digital twin built on Microsoft Fabric" demo, and places it in an Azure IoT Operations architecture.
 
-**This repository contains Phase 1:** an Azure VM as the edge server, Azure IoT Operations, a turbine simulator with fault injection, ingestion into a Fabric eventstream, Eventhouse and Lakehouse, and the data that the questions of a wind farm's staff need: two years of operating history, a forecast, a budget, contracts and reference data.
+**Phase 1** is the ground everything stands on: an Azure VM as the edge server, Azure IoT Operations, a turbine simulator with fault injection, ingestion into a Fabric eventstream, Eventhouse and Lakehouse, and the data that the questions of a wind farm's staff need: two years of operating history, a forecast, a budget, contracts and reference data. **Phase 2** adds a star schema, a semantic model and a report; **Phase 3** a data agent, an ontology and an operations agent; **Phase 4** the 3D twin itself, as a Fabric app built with Rayfin. Phases 1 to 3 have been deployed; Phase 4 runs on sample data and has not met Fabric yet.
 
 ```
 Edge server (Azure VM, K3s, Azure Arc)                Microsoft Fabric
@@ -30,6 +30,7 @@ The site, Northwind Ridge Wind Farm, is fictional: 12 turbines of 4.2 MW on proc
 | Checks added after the second deployment (object ID format, step 3 feature check, longer health wait in step 4, `ssh` falling back to `run`) | Scenario tests and ShellCheck; not yet run against Azure |
 | Phase 2: prepared views, model tables, semantic model, acceptance test, report | Deployed once, on 20 November 2026; three obstacles, all fixed. The user reported every step as done; the outputs of the acceptance test and of the report were not sent, so the measures and the report count as run, not as verified. See [docs/phase2-validation-log.md](docs/phase2-validation-log.md) |
 | Phase 3: data agent, its test, ontology, operations agent | Deployed on the user's tenant on 21 November 2026. The data agent was built and tested six times: about 39 of 52 test questions pass by the judge of the SDK. The ontology was created, and measured to make the agent worse, so the agent runs without it. The operations agent was set up; its playbook and its Teams message were reported, not seen. Seven obstacles, all in [docs/phase3-validation-log.md](docs/phase3-validation-log.md) |
+| Phase 4: the twin as a Fabric app (`app/`) | Built on 21 November 2026, **not deployed yet**. The 3D scene, the panels and the simulation run: open `app/preview/windfarm-twin-preview.html`. The app was compiled, built and linted inside Microsoft's template for Rayfin 2.0.1; its functions pass 42 tests against stand-ins for Fabric. Which token the Eventhouse accepts from an app is open until the first deployment. See [docs/phase4-validation-log.md](docs/phase4-validation-log.md) |
 | Phases 4 and 5 | Planned; see the roadmap |
 
 "What has and has not been verified" in [docs/00-architecture.md](docs/00-architecture.md) has the details.
@@ -43,6 +44,8 @@ The site, Northwind Ridge Wind Farm, is fictional: 12 turbines of 4.2 MW on proc
 | [docs/08-semantic-model.md](docs/08-semantic-model.md) | The model's tables, relationships and 39 measures with their DAX |
 | [docs/09-deployment-guide-phase3.md](docs/09-deployment-guide-phase3.md) | Phase 3: data agent and its test, ontology, operations agent, and how to show them |
 | [docs/10-ontology.md](docs/10-ontology.md) | The ontology's entity types, properties and relationships with the tables behind them |
+| [docs/11-deployment-guide-phase4.md](docs/11-deployment-guide-phase4.md) | Phase 4: create the Fabric app, deploy it, check its connections, show it |
+| [app/README.md](app/README.md) | The twin: what is in the folder, how it gets its values, what the picture means |
 | [docs/06-upgrade-from-first-delivery.md](docs/06-upgrade-from-first-delivery.md) | Bring a deployment of the first version up to this one |
 | [docs/02-demo-runbook.md](docs/02-demo-runbook.md) | How to inject a fault, what to show, and the story in the history behind it |
 | [docs/04-use-cases-and-data-audit.md](docs/04-use-cases-and-data-audit.md) | Who asks what at a wind farm, how the measures are defined, which data answers which question, and what is not modelled |
@@ -51,7 +54,7 @@ The site, Northwind Ridge Wind Farm, is fictional: 12 turbines of 4.2 MW on proc
 | [docs/data-contracts.md](docs/data-contracts.md) | Topics, message formats, commands, reference files, history tables column by column |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | What to check when a step does not behave as described |
 | [docs/03-roadmap.md](docs/03-roadmap.md) | Phases 4 and 5, and what Phases 2 and 3 delivered |
-| [docs/phase1-validation-log.md](docs/phase1-validation-log.md), [docs/phase2-validation-log.md](docs/phase2-validation-log.md), [docs/phase3-validation-log.md](docs/phase3-validation-log.md) | The obstacles of the live deployments and what was changed for each; for Phase 3, what was checked before its first run |
+| [docs/phase1-validation-log.md](docs/phase1-validation-log.md), [docs/phase2-validation-log.md](docs/phase2-validation-log.md), [docs/phase3-validation-log.md](docs/phase3-validation-log.md), [docs/phase4-validation-log.md](docs/phase4-validation-log.md) | The obstacles of the live deployments and what was changed for each; for Phase 3, what was checked before its first run |
 
 ## Repository layout
 
@@ -70,6 +73,7 @@ The site, Northwind Ridge Wind Farm, is fictional: 12 turbines of 4.2 MW on proc
 | `fabric/kql/` | Eventhouse tables, update policies, OneLake availability, validation queries, live questions |
 | `fabric/notebooks/` | Eleven notebooks. 01 to 04, Phase 1: load the reference tables, generate the history, refresh the forecast, answer the question bank. 05 to 08, Phase 2: model tables, semantic model, its test, report. 09 to 11, Phase 3: build the data agent, test it, build the ontology |
 | `fabric/data-agent/`, `fabric/ontology/`, `fabric/operations-agent/` | Phase 3: the data agent's instructions and example queries, the ontology's definition, the operations agent's goals and instructions. Generated from `tools/agent_spec.py` |
+| `app/` | Phase 4: the twin. `overlay/` holds the page (React, Three.js) and the four functions; `create-app.sh` puts them on Microsoft's Rayfin template; `preview/` is the twin on sample data in one file; `test/` the tests of its code |
 | `tools/` | Builds the notebooks from their sources; the question bank; the semantic model's definition (`model_spec.py`) and the builder of the Phase 2 notebooks; the definition of the agents and the ontology (`agent_spec.py`), the builder of the Phase 3 files and the check of the T-SQL example queries; local Spark runs of the notebooks; offline KQL syntax check; guards and scenario tests for the shell scripts |
 
 ## The demo in one minute
@@ -88,10 +92,11 @@ In Fabric, the validation queries show WT-07's gearbox vibration and oil tempera
 ```bash
 cd simulator
 pip install -r requirements-dev.txt
-python -m pytest                                                              # 64 tests
+python -m pytest                                                              # 86 tests
 SITE_FILE=../data/reference/site.json SINK=stdout python -m windfarm_sim | head -n 20   # live messages
 python -m windfarm_sim.history --site ../data/reference/site.json --out /tmp/history    # two years of history as CSV
 cd .. && bash tools/script-tests/run.sh                                       # the shell scripts against stand-in commands
+explorer.exe app/preview    # on WSL: then open windfarm-twin-preview.html, the 3D twin on sample data
 ```
 
 See [simulator/README.md](simulator/README.md).

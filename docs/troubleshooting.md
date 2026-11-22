@@ -475,3 +475,7 @@ The table "If something fails" at the end of [09-deployment-guide-phase3.md](09-
 
 - Before reading a test result of the data agent, read section 4 of notebook 09. It says which instructions, examples and ontology the published agent has.
 - Do not judge a change to the agent by one test run. The total moves by about two questions between runs of an unchanged agent, and single verdicts flip.
+
+## Phase 4
+
+The table "If something fails" at the end of [11-deployment-guide-phase4.md](11-deployment-guide-phase4.md) covers the creation of the app, the sign-in from WSL, the deployment and the app itself. Before anything else, open the connection check in the app (select the badge at the top right) and read its six lines: each names one thing the app needs from Fabric and says what Fabric answered.

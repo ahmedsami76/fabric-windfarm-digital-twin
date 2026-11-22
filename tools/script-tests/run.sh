@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Scenario tests for infra/vm.sh, infra/01-create-edge-vm.sh, infra/99-cleanup.sh and the
-# checks on where a script runs. Nothing here touches Azure or a VM: the commands az, ssh, scp, curl and a
+# Scenario tests for infra/vm.sh, infra/01-create-edge-vm.sh, infra/99-cleanup.sh, app/create-app.sh and
+# the checks on where a script runs. Nothing here touches Azure or a VM: the commands az, ssh, scp, curl and a
 # few others are replaced by the stand-ins in tools/script-tests/stubs, which answer from
 # files in a scratch folder and log every call.
 #   bash tools/script-tests/run.sh
@@ -318,4 +318,51 @@ check "--fabric with --fabric-workspace: refuses the combination" 1 "not both" "
 echo vm-windfarm-edge > "$STUB_DIR/hostname"
 run bash "$CLEAN" --azure --yes
 check "clean-up on the edge VM: stops" 1 "not on the edge VM" "!group delete"
+
+# ---- app/create-app.sh: the Fabric app of Phase 4 is put together from the template, its functions pack
+# and the overlay. node, npm and npx are stand-ins (stubs-app); a copy of the app folder is used, so the
+# repository gets no app/windfarm-twin.
+chmod +x "$HERE"/stubs-app/*
+APPDIR="$SCRATCH/app"; CREATE="$APPDIR/create-app.sh"
+app_reset() { reset; rm -rf "$APPDIR"; mkdir -p "$APPDIR"; cp -R "$REPO/app/overlay" "$APPDIR/overlay"; cp "$REPO/app/create-app.sh" "$CREATE"; }
+app_run() { OUT="$(PATH="$HERE/stubs-app:$PATH" bash "$CREATE" "$@" 2>&1)"; RC=$?; }
+W="$APPDIR/windfarm-twin"
+
+app_reset; app_run
+OUT="$OUT
+app:$(grep -c "TwinApp" "$W/packages/frontend/src/App.tsx") twin:$([[ -f "$W/packages/frontend/src/twin/scene/SceneEngine.ts" ]] && echo yes) fn:$(grep -c "getLiveState" "$W/packages/functions/src/function_app.ts") title:$(grep -c "Northwind Ridge" "$W/packages/frontend/index.html")"
+check "create-app, fresh: scaffolds at the pinned version, adds the pack, copies the twin, installs three.js, checks" 0 "create-rayfin@2.0.1 --project-name windfarm-twin --template blankapp" "npm run pack:add -- functions (in windfarm-twin)" "app:[1-9]" "twin:yes" "fn:[1-9]" "title:1" "three@0.187.0" "@types/three@0.187.0" "npm run typecheck (in windfarm-twin)" "npx rayfin up --workspace WindFarmDigitalTwin"
+
+: > "$STUB_DIR/calls.log"; echo "// edited by hand" > "$W/packages/frontend/src/twin/TwinApp.tsx"; app_run
+OUT="$OUT
+restored:$(grep -c "edited by hand" "$W/packages/frontend/src/twin/TwinApp.tsx")"
+check "create-app, run again: keeps the app, adds nothing twice, copies the overlay again" 0 "keeping it" "already there" "already a dependency" "restored:0" "npm run typecheck (in windfarm-twin)" "!create-rayfin" "!pack:add" "!npm install"
+
+: > "$STUB_DIR/calls.log"; app_run --overlay
+check "create-app --overlay: copies only" 0 "Copied the twin" "!create-rayfin" "!npm run typecheck (in" "!npm install"
+
+app_reset; echo "v20.19.0" > "$STUB_DIR/node_version"; app_run
+check "create-app, Node.js 20: stops before anything is created" 1 "Node.js 20.19.0 is too old" "!create-rayfin"
+
+app_reset; echo "10.9.9" > "$STUB_DIR/npm_version"; app_run
+check "create-app, npm 10: says what was seen with it, and goes on" 0 "edgesOut" "npm install -g npm@latest" "create-rayfin@2.0.1"
+
+app_reset; touch "$STUB_DIR/scaffold_fails"; app_run
+check "create-app, the scaffolder creates nothing: stops and says so" 1 "ended without creating" "!pack:add"
+
+app_reset; touch "$STUB_DIR/pack_fails"; app_run
+check "create-app, the functions pack creates nothing: stops and says so" 1 "did not create packages/functions" "!typecheck"
+
+app_reset; touch "$STUB_DIR/typecheck_fails"; app_run
+check "create-app, the check fails: the app is not called ready" 1 "not ready to deploy" "!The app is ready"
+
+app_reset; mkdir -p "$W"; echo notes > "$W/notes.txt"; app_run
+check "create-app, a folder of that name that is no app: leaves it alone" 1 "not a Rayfin project" "!create-rayfin"
+
+app_reset; app_run --force
+check "create-app, unknown option: refuses" 1 "Unknown option --force" "!create-rayfin"
+
+app_reset; app_run --overlay
+check "create-app --overlay without an app: says to run without the option" 1 "not a Rayfin project"
+
 echo; echo "passed $pass, failed $fail"; [[ $fail -eq 0 ]]

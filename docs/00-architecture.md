@@ -149,7 +149,12 @@ The ontology **WindFarmOntology** has 10 entity types (site, turbine, component,
 
 ### 8. App (Phase 4)
 
-A Rayfin Fabric app: React and Three.js front end with procedural terrain built from the same `heightmap.json` the simulator's site uses, turbines placed from the registry, live values and alarms, a component view per turbine, and the chat panel.
+A Fabric app built with Rayfin 2.0.1 ([11-deployment-guide-phase4.md](11-deployment-guide-phase4.md), [../app/README.md](../app/README.md)).
+
+- **The page** is React and Three.js, hosted by Fabric behind its sign-in. It draws the terrain from the same `heightmap.json` the simulator's site uses, the roads from the GIS layer and a turbine at each registry position, and it moves what the data moves: rotor speed, nacelle direction, blade pitch, state, gearbox condition.
+- **Four functions** run in Fabric as the identity of the app, which is its owner. `getLiveState` and `getTurbineTrend` query the KQL database; `askAgent` sends a question to the published data agent through its Model Context Protocol address; `getDiagnostics` tries each connection and reports. The page asks `getLiveState` every 5 seconds. No token reaches the browser.
+- **Nothing is configured.** The functions find the workspace, the KQL database and the data agent by name.
+- The same page runs on a simulation built into it: with `?sample`, and as `app/preview/windfarm-twin-preview.html`.
 
 ## Design decisions
 
@@ -229,6 +234,8 @@ Three levels of evidence, kept apart on purpose.
 **Phase 2.** [07-deployment-guide-phase2.md](07-deployment-guide-phase2.md) has its own table of what was and was not tested, and [phase2-validation-log.md](phase2-validation-log.md) the record of its first run.
 
 **Phase 3.** Deployed on 21 November 2026. [09-deployment-guide-phase3.md](09-deployment-guide-phase3.md) lists what ran with output seen, what was only reported, and what was checked without Fabric; [phase3-validation-log.md](phase3-validation-log.md) is the record.
+
+**Phase 4.** Built on 21 November 2026, not deployed yet. The page runs on sample data; the app compiles, builds and lints inside Microsoft's template; the functions pass their tests against stand-ins for Fabric. [11-deployment-guide-phase4.md](11-deployment-guide-phase4.md) lists what ran and what needs Fabric.
 
 **Not tested.** The upgrade of a running deployment as one sequence; `infra/rebuild-env.sh` against Azure; a successful `az iot ops delete` through the clean-up script; stopping and restarting the VM and the capacity; the checks added after the second run, against Azure; the just-in-time request of `vm.sh`. Not confirmed: the KQL added since the first run, in an Eventhouse.
 

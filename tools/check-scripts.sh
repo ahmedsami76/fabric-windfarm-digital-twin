@@ -23,7 +23,7 @@ report() {  # report RULE FILE HITS
   printf 'FAIL rule %s: %s\n%s\n' "$1" "${2#"$REPO_ROOT"/}" "$3"
   status=1
 }
-for script in "$REPO_ROOT"/infra/*.sh "$REPO_ROOT"/edge/scripts/*.sh "$REPO_ROOT"/tools/*.sh; do
+for script in "$REPO_ROOT"/infra/*.sh "$REPO_ROOT"/edge/scripts/*.sh "$REPO_ROOT"/tools/*.sh "$REPO_ROOT"/app/*.sh; do
   # Comment lines may mention the commands; only executable lines count.
   code="$(grep -n -v -E '^[[:space:]]*#' "$script" || true)"
   ok=yes
@@ -34,7 +34,7 @@ for script in "$REPO_ROOT"/infra/*.sh "$REPO_ROOT"/edge/scripts/*.sh "$REPO_ROOT
     report 2 "$script" "$hits"; ok=""
   fi
   if [[ ! -x "$script" ]]; then
-    report 3 "$script" "  not executable. Cure, from the repository root: chmod +x infra/*.sh edge/scripts/*.sh config/load-env.sh tools/*.sh"; ok=""
+    report 3 "$script" "  not executable. Cure, from the repository root: chmod +x infra/*.sh edge/scripts/*.sh config/load-env.sh tools/*.sh app/*.sh"; ok=""
   fi
   if [[ -n "$ok" ]]; then printf 'ok   %s\n' "${script#"$REPO_ROOT"/}"; fi
 done

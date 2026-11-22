@@ -1,0 +1,34 @@
+// =====================================================================================
+// Wind farm digital twin: the queries of the app of Phase 4
+//
+// These are the four queries the functions of the Fabric app run, word for word
+// (app/overlay/packages/functions/src/live.ts; a test compares the two). Run them here
+// to see what the app sees. Each block is one query: put the cursor in it and select Run.
+// =====================================================================================
+
+// 1. The newest row of every turbine. The app asks every 5 seconds.
+//    Expected: 12 rows while the simulator runs, none when it has been silent for 10 minutes.
+TurbineTelemetry
+| where Timestamp > ago(10m)
+| summarize arg_max(Timestamp, State, WindSpeed, WindDirection, AmbientTemp, ActivePower, PowerSetpoint, RotorSpeed, PitchAngle, NacelleDirection, YawError, GearboxOilTemp, GearboxBearingTemp, GearboxVibration, GeneratorWindingTemp, MainBearingTemp, TowerVibration) by TurbineId
+| order by TurbineId asc
+
+// 2. The alarms that are raised and have not cleared. Expected: no row on a healthy site.
+ActiveAlarms()
+| order by RaisedAt desc
+| take 100
+
+// 3. The newest observation of the met mast. Expected: one row.
+WeatherObservations
+| where Timestamp > ago(10m)
+| summarize arg_max(Timestamp, WindSpeed, WindDirection, WindGust, AmbientTemp, AirDensity)
+
+// 4. One turbine, minute by minute, for the panel of that turbine. The app puts in the
+//    turbine and the number of minutes (5 to 360) after checking both.
+TurbineTelemetry
+| where Timestamp > ago(60m) and TurbineId == 'WT-07'
+| summarize ActivePower = avg(ActivePower), WindSpeed = avg(WindSpeed), RotorSpeed = avg(RotorSpeed), GearboxOilTemp = avg(GearboxOilTemp), GearboxBearingTemp = avg(GearboxBearingTemp), GearboxVibration = avg(GearboxVibration) by Timestamp = bin(Timestamp, 1m)
+| order by Timestamp asc
+
+// 5. What the connection check of the app runs. Expected: about 24 rows from 12 turbines.
+TurbineTelemetry | where Timestamp > ago(2m) | summarize Rows = count(), Turbines = dcount(TurbineId), Newest = max(Timestamp)

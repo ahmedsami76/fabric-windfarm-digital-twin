@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+[[ -f "$STUB_DIR/port_open" ]]

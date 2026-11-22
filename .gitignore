@@ -1,0 +1,16 @@
+# local configuration with your subscription and workspace details
+config/demo.env
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+build/
+# rendered files and secrets
+edge/dataflows/rendered/
+*.pem
+ca.crt
+.DS_Store
+node_modules/
+package-lock.json

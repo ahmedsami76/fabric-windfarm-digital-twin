@@ -12,7 +12,7 @@
  */
 import { LAKEHOUSE_WINDOW_MINUTES, LIVE_WINDOW } from './config.js';
 import type { Alarm, DiagnosticStep, LiveState, TrendPoint, TurbineLive, TurbineState, Weather } from './contract.js';
-import { type Access, type Lookup, brief, clearLookup, lookup, lookupLakehouse } from './fabric.js';
+import { type Access, type LakehouseLookup, type Lookup, brief, clearLookup, lookup, lookupLakehouse } from './fabric.js';
 import { KustoError, runQuery } from './kusto.js';
 import { NoPrincipal, type Principal, clearPrincipalToken, principalToken } from './principal.js';
 import type { Row, SqlBatch } from './sql.js';
@@ -214,9 +214,17 @@ export function toTrendPoint(row: Record<string, unknown>): TrendPoint {
  */
 let acceptedDatabase: string | undefined;
 
-/** Forget it. Used by the connection check and by the tests. */
+/** The same for the SQL endpoint of the Lakehouse: the name of the database it answered to. */
+let acceptedSqlDatabase: string | undefined;
+
+/** Forget both. Used by the connection check and by the tests. */
 export function resetRoute(): void {
   acceptedDatabase = undefined;
+  acceptedSqlDatabase = undefined;
+}
+
+export function currentSqlDatabase(): string | undefined {
+  return acceptedSqlDatabase;
 }
 
 export function currentDatabase(): string | undefined {
@@ -274,18 +282,56 @@ export async function trendFromEventhouse(access: Access, principal: () => Princ
 /** Opens the SQL endpoint of a Lakehouse: server, database (the item identifier), token. */
 export type SqlConnect = (server: string, database: string, token: string) => SqlBatch;
 
+/**
+ * The names the SQL endpoint may know the Lakehouse by, in the order they are tried. Rayfin's guide
+ * says the item identifier of the Lakehouse; the first deployment got "the database was not found or
+ * you have insufficient permissions" for it (23 November 2026). The endpoint is an item of its own
+ * with its own identifier, and SQL tools connect with the display name. So all three are tried, and
+ * the one that answers is remembered while the host lives.
+ */
+export function sqlDatabaseNames(found: LakehouseLookup): { name: string; kind: string }[] {
+  const names = [
+    { name: found.lakehouseId, kind: 'the item identifier of the Lakehouse' },
+    { name: found.lakehouseName, kind: 'the name of the Lakehouse' },
+    ...(found.sqlEndpointId ? [{ name: found.sqlEndpointId, kind: 'the item identifier of the SQL endpoint' }] : []),
+  ];
+  return names.filter((n, i) => names.findIndex((m) => m.name === n.name) === i);
+}
+
+/** True when the endpoint let the token in and did not open the database: another name may work. */
+const databaseNotOpened = (error: unknown): boolean =>
+  /database was not found|insufficient permissions to connect|cannot open database|ELOGIN/i.test(error instanceof Error ? error.message : String(error));
+
+/** Runs the statements on the Lakehouse, under the first database name the endpoint accepts. */
+export async function queryLakehouse(found: LakehouseLookup, token: string, connect: SqlConnect, statements: string[]): Promise<Row[][]> {
+  const candidates = sqlDatabaseNames(found);
+  const order = acceptedSqlDatabase ? candidates.filter((c) => c.name === acceptedSqlDatabase) : candidates;
+  const said: string[] = [];
+  for (const candidate of order.length ? order : candidates) {
+    try {
+      const rows = await connect(found.sqlServer, candidate.name, token)(statements);
+      acceptedSqlDatabase = candidate.name;
+      return rows;
+    } catch (error) {
+      if (!databaseNotOpened(error)) throw error;
+      said.push(`as ${candidate.kind}: ${brief(error).slice(0, 150)}`);
+    }
+  }
+  acceptedSqlDatabase = undefined; // what worked before no longer does: try every name next time
+  throw new Error(`The SQL endpoint opened the database under none of ${said.length} names. ${said.join(' | ')}`);
+}
+
 /** The live values from the copies of the tables in the Lakehouse, as the owner of the app. */
 export async function liveFromLakehouse(access: Access, sqlToken: () => string, connect: SqlConnect): Promise<LiveState> {
   const found = await lookupLakehouse(access);
-  const batch = connect(found.sqlServer, found.lakehouseId, sqlToken());
-  const [turbineRows, alarmRows, weatherRows] = await batch([SQL_TURBINES, SQL_ALARMS, SQL_WEATHER]);
+  const [turbineRows, alarmRows, weatherRows] = await queryLakehouse(found, sqlToken(), connect, [SQL_TURBINES, SQL_ALARMS, SQL_WEATHER]);
   return liveState('lakehouse', turbineRows ?? [], alarmRows ?? [], weatherRows ?? []);
 }
 
 export async function trendFromLakehouse(access: Access, sqlToken: () => string, connect: SqlConnect, turbineId: string, minutes: number): Promise<TrendPoint[]> {
   const statement = sqlTrendQuery(turbineId, minutes);
   const found = await lookupLakehouse(access);
-  const [rows] = await connect(found.sqlServer, found.lakehouseId, sqlToken())([statement]);
+  const [rows] = await queryLakehouse(found, sqlToken(), connect, [statement]);
   return (rows ?? []).map(toTrendPoint);
 }
 
@@ -376,8 +422,9 @@ export async function checkLakehouse(access: Access, sqlToken: () => string, con
   } catch (error) {
     step(steps, 'Lakehouse route: token for SQL', false, brief(error));
   }
-  let found: Awaited<ReturnType<typeof lookupLakehouse>> | undefined;
+  let found: LakehouseLookup | undefined;
   try {
+    clearLookup();
     found = await lookupLakehouse(access);
     step(steps, 'Lakehouse route: Lakehouse and SQL endpoint', true, `${found.lakehouseName} at ${found.sqlServer}`);
   } catch (error) {
@@ -385,14 +432,17 @@ export async function checkLakehouse(access: Access, sqlToken: () => string, con
   }
   if (found && token) {
     try {
-      const [rows] = await connect(found.sqlServer, found.lakehouseId, token)([SQL_PROBE]);
+      acceptedSqlDatabase = undefined; // the check tries every name afresh
+      const [rows] = await queryLakehouse(found, token, connect, [SQL_PROBE]);
       const r = rows?.[0] ?? {};
       const newest = text(r.Newest);
+      const opened = sqlDatabaseNames(found).find((n) => n.name === acceptedSqlDatabase)?.kind ?? 'an unknown name';
       step(steps, 'Lakehouse route: query', num(r.Rows) > 0, num(r.Rows) > 0
-        ? `${num(r.Rows)} rows from ${num(r.Turbines)} turbines in the last ${LAKEHOUSE_WINDOW_MINUTES} minutes; newest ${minutesOld(newest, now)}`
-        : `the query ran and found no telemetry in the last ${LAKEHOUSE_WINDOW_MINUTES} minutes`);
+        ? `${num(r.Rows)} rows from ${num(r.Turbines)} turbines in the last ${LAKEHOUSE_WINDOW_MINUTES} minutes; newest ${minutesOld(newest, now)}; database opened as ${opened}`
+        : `the query ran and found no telemetry in the last ${LAKEHOUSE_WINDOW_MINUTES} minutes; database opened as ${opened}`);
     } catch (error) {
-      step(steps, 'Lakehouse route: query', false, brief(error));
+      // Longer than other lines on purpose: it carries what the endpoint said to each name.
+      steps.push({ step: 'Lakehouse route: query', ok: false, detail: (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').slice(0, 900) });
     }
   }
   return steps;

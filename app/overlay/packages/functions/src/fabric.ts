@@ -23,6 +23,8 @@ export interface LakehouseLookup {
   workspaceId: string;
   lakehouseId: string;
   lakehouseName: string;
+  /** The item identifier of the SQL analytics endpoint, which is an item of its own. Null when Fabric does not give it. */
+  sqlEndpointId: string | null;
   sqlServer: string;
 }
 
@@ -52,7 +54,7 @@ interface FabricItem {
   type?: string;
   properties?: {
     queryServiceUri?: string;
-    sqlEndpointProperties?: { connectionString?: string | null; provisioningStatus?: string } | null;
+    sqlEndpointProperties?: { connectionString?: string | null; id?: string | null; provisioningStatus?: string } | null;
   };
 }
 
@@ -129,6 +131,7 @@ export async function lookupLakehouse(access: Access, now: number = Date.now()):
     workspaceId: workspace.id,
     lakehouseId: lakehouse.id,
     lakehouseName: lakehouse.displayName,
+    sqlEndpointId: endpoint?.id ?? null,
     sqlServer,
   };
   cachedLakehouse = { at: now, value };

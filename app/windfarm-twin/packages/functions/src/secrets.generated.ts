@@ -20,7 +20,12 @@
  * never written to disk.
  */
 
-// No secrets are declared in rayfin.yml, so the registry stays empty and
-// ctx.Secrets exposes nothing.
+declare module '@microsoft/fabric-user-data-functions' {
+  interface RayfinSecretRegistry {
+    KUSTO_CLIENT_ID: string;
+    KUSTO_CLIENT_SECRET: string;
+    KUSTO_TENANT_ID: string;
+  }
+}
 
 export {};

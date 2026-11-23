@@ -1,14 +1,14 @@
 # Roadmap
 
-Phase 1 is in this repository. The later phases are planned below, each with what it delivers, what it depends on and the decisions still open. Product facts were checked against the Microsoft Fabric documentation in November 2026; several of these features are in preview and may change.
+Phases 1 to 4 are in this repository and have been deployed. Phase 5 is planned below, with what it delivers, what it depends on and what is still to be proven; the sections on Phases 2 to 4 say what each delivered and what it left open. Product facts were checked against the Microsoft Fabric documentation in November 2026; several of these features are in preview and may change.
 
 | Phase | Delivers | State |
 |---|---|---|
 | 1. Edge to Eventhouse and Lakehouse | Edge VM, Azure IoT Operations, simulator with fault injection, eventstream, Eventhouse, Lakehouse, reference data, two years of operating history, forecast, question bank | Built. The edge-to-Fabric path was run live once; the history and the helper scripts added afterwards were tested without Azure and Fabric. |
 | 2. Prepare and model | Enriched tables and KQL views, semantic model | Delivered; deployed on 20 November 2026 |
 | 3. Ontology and agents | Data agent with a test, ontology, operations agent that detects the fault | Delivered; deployed on 21 November 2026 |
-| 4. Rayfin app | 3D digital twin with live data and chat | Built on 21 November 2026; first deployed on 23 November 2026. The app runs; its two routes for the live values, built that night, have not run in Fabric yet |
-| 5. Remediation with approval | Operations agent proposes a fix, an engineer approves, the edge applies it | Planned |
+| 4. Rayfin app | 3D digital twin with live data, an exploded view of each turbine and chat | Delivered; deployed on 23 November 2026. Both routes for the live values worked |
+| 5. Remediation with approval | Operations agent proposes a fix, an engineer approves, the edge applies it | In three steps. 5a, the command path from Fabric to the edge, was built on 23 November 2026 and has not run yet ([12-deployment-guide-phase5a.md](12-deployment-guide-phase5a.md)). 5b the approval and 5c the confirmation are planned |
 
 ## Phase 2: Prepare and model
 
@@ -65,22 +65,22 @@ Phase 1 is in this repository. The later phases are planned below, each with wha
 
 ## Phase 4: Rayfin app
 
-**Built on 21 November 2026, the exploded view on 22 November; not deployed yet.** [11-deployment-guide-phase4.md](11-deployment-guide-phase4.md) is its guide, [phase4-validation-log.md](phase4-validation-log.md) the record, [../app/README.md](../app/README.md) the description of the code.
+**Built on 21 November 2026, the exploded view on 22 November; deployed on 23 November 2026.** [11-deployment-guide-phase4.md](11-deployment-guide-phase4.md) is its guide, [phase4-validation-log.md](phase4-validation-log.md) the record of the deployment and its thirteen obstacles, [../app/README.md](../app/README.md) the description of the code.
 
 **Delivers**
 
 - A Fabric app created with the Rayfin CLI 2.0.1 from Microsoft's Universal App template: a React and Three.js page hosted in the workspace behind the Fabric sign-in, and seven functions.
-- The site in 3D: terrain from `reference/terrain/heightmap.json`, roads from the GIS layer, the substation, the met mast, and a turbine at each registry position. Rotors turn at the reported speed, nacelles face the reported direction, blades feather when a turbine stops, a ring on the ground carries the state, and the nacelle changes colour when the gearbox passes the thresholds of the operations agent.
+- The site in 3D: terrain from `reference/terrain/heightmap.json`, roads from the GIS layer, the substation, the met mast, and a turbine at each registry position. Rotors turn at the reported speed, nacelles face the reported direction, blades feather when a turbine stops, a ring on the ground carries the state, and a halo around it and the nacelle carry the condition of the gearbox: amber past the early warning of the operations agent, red when the turbine controller has an alarm.
 - An exploded view of each turbine: the cover of the nacelle lifts off and the turbine comes apart into the eleven components of `ref_components`, each with its live values and a colour that follows the alarms of the turbine controller on that component.
 - Site figures, the list of turbines, a panel per turbine with live values and the trend of the last hour, the active alarms. With a turbine taken apart, the panel lists its components, and each row can put a question about that component to the data agent.
 - A chat that sends questions to the data agent of Phase 3.
 - A connection check inside the app, and the same twin on simulated values: in the app with `?sample`, and as one HTML file that needs nothing.
 
-**How the app reads live data: decided twice.** The plan of 21 November was functions that query the KQL database as the identity of the app. The first deployment showed that a Fabric app gets no token the Eventhouse accepts. Since 23 November the app has two routes: the Lakehouse shortcuts through the SQL analytics endpoint, minutes behind and without set-up, and the KQL database as a service principal, seconds behind. Rayfin 2.0.1 has connector types for an Eventhouse and for a data agent, but holds both back; when they are released, or when an app can run as its own identity, the principal can go.
+**How the app reads live data: decided twice.** The plan of 21 November was functions that query the KQL database as the identity of the app. The first deployment showed that a Fabric app gets no token the Eventhouse accepts. Since 23 November the app has two routes: the Lakehouse shortcuts through the SQL analytics endpoint, minutes behind and without set-up, and the KQL database as a service principal, under a minute behind. Both worked on the tenant: 2 minutes and 56 seconds at one reading each. Rayfin 2.0.1 has connector types for an Eventhouse and for a data agent, but holds both back; when they are released, or when an app can run as its own identity, the principal can go.
 
 **Not yet**
 
-- Deployed. Three things can only be found out there: what the deployment does with the token declared for the Eventhouse, which token the Eventhouse accepts, and whether the data agent answers live questions for the identity of an app. The connection check of the app reports all three.
+- Confirmed from the tenant: the chat (whether the data agent answers for the identity of the app, for live questions too), and a connection check of the final build with the measured delay. Phase 5 deploys the app again and asks for both.
 - A model of a real machine. The inside of the turbine is drawn from simple shapes at estimated sizes.
 - An answer that appears while the agent is still working: functions cannot stream.
 
@@ -93,7 +93,19 @@ Phase 1 is in this repository. The later phases are planned below, each with wha
 - After approval, the action runs: a Power Automate flow or a Fabric notebook writes a command event to an eventstream. An Azure IoT Operations data flow, with that eventstream's custom endpoint as its Kafka source, publishes the command to the edge topic `…/_control/request`, and the simulator applies it.
 - The agent confirms from telemetry that the action took effect, reviews at the review time, and records the event in a work order table.
 
-**To be proven.** The cloud-to-edge path is a design built from documented parts (an eventstream custom endpoint as destination, a Kafka endpoint as data flow source). It has not been built yet.
+**In three steps, each delivered and tested before the next.**
+
+| Step | Delivers | Proves |
+|---|---|---|
+| 5a. The command path | A second eventstream for commands. An Azure IoT Operations data flow, created by script, with that eventstream's custom endpoint as its Kafka source and the broker topic `…/_control/request` as its destination. A notebook or a query that writes one command event by hand | That a command written in Fabric reaches the simulator and curtails a turbine. This is the part no documentation shows end to end, so it comes first and alone |
+| 5b. The approval | A custom action of the operations agent that runs a Fabric notebook with the turbine, the percentage and the duration as parameters; the Teams message with the cost of acting and of not acting; the fault injected with `--hold` | That an engineer's Yes in Teams, with the values adjusted or not, becomes the command of 5a |
+| 5c. Closing the loop | The agent confirms from telemetry that the setpoint took effect; a work order row records the event; the twin shows the curtailment and who approved it | That the record of the action is in the same data the agents and the twin read |
+
+**What was read from the documentation on 23 November 2026, and is not yet built.** A custom action of an operations agent can be a Fabric item (a notebook, a pipeline, a user-defined function) or a Power Automate flow. The Teams message offers Yes and No, and the approver can change the parameter values before saying Yes. The agent acts with the identity of the person who created it, and the feature is in preview. In Azure IoT Operations a custom Kafka endpoint may be the source of a data flow when the default MQTT broker is the destination; the operations experience cannot create such a data flow, a Kubernetes manifest or Bicep can. The simulator already has the control topic, the curtailment and the alarm "Power limited by remote setpoint" with SOP-CUR-006.
+
+**5a as built (23 November 2026).** `infra/08-create-command-path.sh` creates the eventstream `WindFarmCommands` from a definition, reads its connection from the Fabric API and creates the endpoint and the data flow with the Azure CLI, which turned out to accept a Kafka source; no manifest is applied on the VM. Notebook `12_send_edge_command` builds one command, checks it and writes it to the eventstream. The simulator needed no change.
+
+**To be proven by its first run.** That Fabric accepts the eventstream definition; that the service takes a Kafka-source data flow from the CLI; that the message arrives on the control topic as the JSON that was written; that a notebook may write to the event hub behind the eventstream. [phase5-validation-log.md](phase5-validation-log.md) has the findings so far.
 
 ## Further options
 

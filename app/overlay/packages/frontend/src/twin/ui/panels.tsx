@@ -4,10 +4,11 @@
  */
 import { useEffect, useState } from 'react';
 
-import { type PartKey, componentQuestion, componentStatus } from '../data/components';
+import { PAGE_BUILD } from '../data/build';
+import { type PartKey, componentQuestion, componentStatus, gearboxCondition } from '../data/components';
 import type { Alarm, DiagnosticStep, LiveState, TrendPoint, TurbineLive } from '../data/contract';
 import type { TwinDataProvider } from '../data/provider';
-import { ALARM_OIL_TEMP, ALARM_VIBRATION, EARLY_OIL_TEMP, EARLY_VIBRATION, SITE, WATCH_YAW_ERROR, gearboxLevel } from '../data/site';
+import { ALARM_OIL_TEMP, ALARM_VIBRATION, EARLY_OIL_TEMP, EARLY_VIBRATION, SITE, WATCH_YAW_ERROR } from '../data/site';
 import { STATE_COLOR } from '../scene/turbine';
 import { clock, errorText, stateLabel, unitLabel } from './format';
 
@@ -33,7 +34,7 @@ export function FleetList({ live, selected, onSelect }: { live: LiveState | null
         {SITE.turbines.map((spec) => {
           const t = byId.get(spec.id);
           const state = t?.state ?? 'UNKNOWN';
-          const level = t ? gearboxLevel(t.gearboxVibration, t.gearboxOilTemp) : 0;
+          const level = t ? gearboxCondition(t, live?.alarms ?? []) : 0;
           const alarms = (live?.alarms ?? []).filter((a) => a.turbineId === spec.id).length;
           return (
             <li key={spec.id}>
@@ -126,7 +127,7 @@ function ComponentList({ turbine, turbineId, alarms, hotPart, onHotPart, onAsk }
         ))}
       </ul>
       <p className="twin-note">
-        Green: no alarm. Amber: a value past a level worth watching (the early warning of the gearbox, a yaw error over {WATCH_YAW_ERROR.toFixed(0)}°). Red: an alarm of the turbine controller is active.
+        Green: no alarm. Amber: a value worth watching (the gearbox past its early warning, a yaw error over {WATCH_YAW_ERROR.toFixed(0)}°). Red: an alarm of the turbine controller, never a reading alone.
       </p>
     </>
   );
@@ -295,6 +296,7 @@ export function Diagnostics({ provider, lastError, onClose }: { provider: TwinDa
   const report = [
     `Wind farm twin, connection check, ${new Date().toISOString()}`,
     `Data source: ${provider.kind}`,
+    `Page: build ${PAGE_BUILD}`,
     ...(status ? [`Live values come from: ${status.route === 'eventhouse' ? 'the Eventhouse (seconds old)' : status.route === 'lakehouse' ? 'the Lakehouse copy (minutes old)' : 'nowhere yet'}`] : []),
     ...(steps ?? []).map((s) => `${s.skipped ? 'SKIP' : s.ok ? 'PASS' : 'FAIL'}  ${s.step}: ${s.detail}`),
     ...(failure ? [`FAIL  The check itself: ${failure}`] : []),

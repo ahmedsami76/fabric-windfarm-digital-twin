@@ -2,13 +2,13 @@
 
 How to run the anomaly demo once Phase 1 is deployed, and how to tell the story around it from the history in the Lakehouse.
 
-Commands are typed on the workstation, in the root folder of the repository; `./infra/vm.sh ssh` runs them on the edge VM. To save typing during a demo, define a short form once per session:
+Commands are typed on the workstation, in the root folder of the repository; `bash infra/vm.sh ssh` runs them on the edge VM. To save typing during a demo, define a short form once per session:
 
 ```bash
-sim() { ./infra/vm.sh ssh bash ./edge/scripts/simctl.sh "$@"; }
+sim() { bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh "$@"; }
 ```
 
-The rest of this document uses `sim`. `sim status` is then the same as `./infra/vm.sh ssh bash ./edge/scripts/simctl.sh status`.
+The rest of this document uses `sim`. `sim status` is then the same as `bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh status`.
 
 The KQL queries are in `fabric/kql/90-validation-queries.kql`; step 8 of the deployment guide shows the ones used here in full.
 
@@ -17,7 +17,7 @@ The KQL queries are in `fabric/kql/90-validation-queries.kql`; step 8 of the dep
 | When | Do | Why |
 |---|---|---|
 | The day before | Run notebook `02_generate_history`, then `04_question_bank` | The history then ends today, and you have the expected answers |
-| 30 minutes before | `./infra/vm.sh status`. Start the VM if it is stopped (`./infra/vm.sh start`), and check that the daily shutdown does not fall inside the demo. | Azure IoT Operations and the simulator need about 5 minutes to come up |
+| 30 minutes before | `bash infra/vm.sh status`. Start the VM if it is stopped (`bash infra/vm.sh start`), and check that the daily shutdown does not fall inside the demo. | Azure IoT Operations and the simulator need about 5 minutes to come up |
 | 20 minutes before | `sim status` | Confirms the simulator runs, shows the wind, and opens SSH access for the session |
 | 15 minutes before | `sim wind --mean 11 --duration 90m` | A gearbox fault barely shows on a turbine that idles in light wind. This holds the wind near 11 m/s. |
 | 10 minutes before | Run queries 1 and 3 in Fabric | Confirms data is arriving and turbines are `RUNNING` |
@@ -38,7 +38,7 @@ Then run query 10 (each turbine against the fleet). WT-07 is already at or near 
 ### 2. Inject the fault
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh
+bash infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh
 ```
 
 This is the same as `sim inject WT-07 gearbox_degradation --severity 0.8 --duration 15m`. The fault ramps in over 4.5 minutes, holds, and ramps out by itself over the last 3 minutes.
@@ -153,7 +153,7 @@ sim reset WT-07                                 # clear a latched trip or derate
 | Small site events | About one per hour across the site: a communication drop of 30 to 75 seconds, a cable untwist pause, a minor yaw offset or a brief sensor freeze | `SPONTANEOUS_EVENTS_PER_HOUR: "0"` in the ConfigMap for a quiet site |
 | Publishing rate | Telemetry every 5 seconds per turbine, weather every 10 seconds | `TELEMETRY_INTERVAL_S`, `WEATHER_INTERVAL_S` |
 
-After changing the ConfigMap, run `./infra/vm.sh push`, then `./infra/vm.sh ssh bash ./edge/scripts/05-deploy-simulator.sh`.
+After changing the ConfigMap, run `bash infra/vm.sh push`, then `bash infra/vm.sh ssh bash ./edge/scripts/05-deploy-simulator.sh`.
 
 ## Reset after the demo
 

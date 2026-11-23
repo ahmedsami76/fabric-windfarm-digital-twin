@@ -23,7 +23,7 @@ CLUSTER_RESOURCE_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE
 log "Checking that the cluster is connected"
 STATUS="$(az resource show --ids "$CLUSTER_RESOURCE_ID" \
   --query properties.connectivityStatus --output tsv)"
-[[ "$STATUS" == "Connected" ]] || die "Cluster $CLUSTER_NAME is '$STATUS', expected 'Connected'. The VM may be stopped by its daily shutdown: run ./infra/vm.sh status, start it with ./infra/vm.sh start, wait about 5 minutes and run this script again."
+[[ "$STATUS" == "Connected" ]] || die "Cluster $CLUSTER_NAME is '$STATUS', expected 'Connected'. The VM may be stopped by its daily shutdown: run bash infra/vm.sh status, start it with bash infra/vm.sh start, wait about 5 minutes and run this script again."
 
 log "Creating the storage account for the schema registry"
 if ! az storage account show --name "$STORAGE_ACCOUNT_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then

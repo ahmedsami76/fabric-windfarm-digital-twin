@@ -2,8 +2,8 @@
 # Rebuilds config/demo.env from what is deployed (run on your workstation, signed in as yourself).
 # For a workstation that lost its copy of the settings, or a new one.
 #
-#   infra/rebuild-env.sh [RESOURCE_GROUP]           default: rg-windfarm-edge
-#   infra/rebuild-env.sh --force [RESOURCE_GROUP]   replace an existing config/demo.env; the old one is kept as demo.env.bak
+#   bash infra/rebuild-env.sh [RESOURCE_GROUP]           default: rg-windfarm-edge
+#   bash infra/rebuild-env.sh --force [RESOURCE_GROUP]   replace an existing config/demo.env; the old one is kept as demo.env.bak
 #
 # The script starts from config/demo.env.example and fills in what Azure knows: subscription,
 # region, the names of the VM, the cluster, the instance, the custom location, the storage
@@ -144,4 +144,4 @@ if [[ ${#NOT_FOUND[@]} -gt 0 ]]; then
 fi
 info "Not stored in Azure, taken from the example file: SSH_SOURCE_CIDR, AIO_SKU, AZ_LOGIN_MODE, FABRIC_WORKSPACE_NAME,"
 info "FABRIC_LAKEHOUSE_NAME, SIM_IMAGE, SIM_NAMESPACE. Change them if you had changed them."
-info "Next: ./infra/vm.sh status    and, to give the VM the same settings: ./infra/vm.sh push-env"
+info "Next: bash infra/vm.sh status    and, to give the VM the same settings: bash infra/vm.sh push-env"

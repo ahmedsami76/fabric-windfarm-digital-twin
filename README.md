@@ -2,7 +2,7 @@
 
 An end-to-end demo that starts at a wind farm's edge server and ends in a live 3D digital twin with agents, built in phases. It reconstructs, from scratch, the kind of solution shown in Microsoft's "real-time 3D digital twin built on Microsoft Fabric" demo, and places it in an Azure IoT Operations architecture.
 
-**Phase 1** is the ground everything stands on: an Azure VM as the edge server, Azure IoT Operations, a turbine simulator with fault injection, ingestion into a Fabric eventstream, Eventhouse and Lakehouse, and the data that the questions of a wind farm's staff need: two years of operating history, a forecast, a budget, contracts and reference data. **Phase 2** adds a star schema, a semantic model and a report; **Phase 3** a data agent, an ontology and an operations agent; **Phase 4** the 3D twin itself, as a Fabric app built with Rayfin. Phases 1 to 3 have been deployed; Phase 4 runs on sample data and has not met Fabric yet.
+**Phase 1** is the ground everything stands on: an Azure VM as the edge server, Azure IoT Operations, a turbine simulator with fault injection, ingestion into a Fabric eventstream, Eventhouse and Lakehouse, and the data that the questions of a wind farm's staff need: two years of operating history, a forecast, a budget, contracts and reference data. **Phase 2** adds a star schema, a semantic model and a report; **Phase 3** a data agent, an ontology and an operations agent; **Phase 4** the 3D twin itself, as a Fabric app built with Rayfin. Phases 1 to 4 have been deployed; Phase 5, remediation with approval, is being built in three steps, and the first, the command path from Fabric to the edge, is ready to run.
 
 ```
 Edge server (Azure VM, K3s, Azure Arc)                Microsoft Fabric
@@ -30,8 +30,9 @@ The site, Northwind Ridge Wind Farm, is fictional: 12 turbines of 4.2 MW on proc
 | Checks added after the second deployment (object ID format, step 3 feature check, longer health wait in step 4, `ssh` falling back to `run`) | Scenario tests and ShellCheck; not yet run against Azure |
 | Phase 2: prepared views, model tables, semantic model, acceptance test, report | Deployed once, on 20 November 2026; three obstacles, all fixed. The user reported every step as done; the outputs of the acceptance test and of the report were not sent, so the measures and the report count as run, not as verified. See [docs/phase2-validation-log.md](docs/phase2-validation-log.md) |
 | Phase 3: data agent, its test, ontology, operations agent | Deployed on the user's tenant on 21 November 2026. The data agent was built and tested six times: about 39 of 52 test questions pass by the judge of the SDK. The ontology was created, and measured to make the agent worse, so the agent runs without it. The operations agent was set up; its playbook and its Teams message were reported, not seen. Seven obstacles, all in [docs/phase3-validation-log.md](docs/phase3-validation-log.md) |
-| Phase 4: the twin as a Fabric app (`app/`) | Built on 21 November 2026, the exploded view of a turbine on 22 November; **not deployed yet**. The 3D scene, the panels and the simulation run: open `app/preview/windfarm-twin-preview.html`. The app was compiled, built and linted inside Microsoft's template for Rayfin 2.0.1; 60 tests cover its functions against stand-ins for Fabric, its simulation and its components against the reference data. Which token the Eventhouse accepts from an app is open until the first deployment. See [docs/phase4-validation-log.md](docs/phase4-validation-log.md) |
-| Phases 4 and 5 | Planned; see the roadmap |
+| Phase 4: the twin as a Fabric app (`app/`) | Deployed on the user's tenant on 23 November 2026. The twin shows the live site in 3D, with an exploded view of each turbine and a chat to the data agent. A Fabric app cannot read the Eventhouse directly, which the deployment showed; the live values come by two routes instead, and both worked: through the Lakehouse (2 minutes behind at the one reading) and, as a service principal, from the Eventhouse (56 seconds). Thirteen obstacles, all addressed. Seen: seven connection checks and two screenshots. Reported and not seen: the successful deployments themselves and the chat. 104 tests cover the app's code against stand-ins for Fabric; `app/preview/windfarm-twin-preview.html` is the twin on sample data. See [docs/phase4-validation-log.md](docs/phase4-validation-log.md) |
+| Phase 5a: the command path from Fabric to the edge (`infra/08-create-command-path.sh`, notebook 12) | Built on 23 November 2026; **not run in Fabric or Azure yet**. The simulator's side is tested: every command the notebook builds is accepted and applied by the simulator's own handler. Four things between the notebook and the simulator are unproven until the first run; [docs/12-deployment-guide-phase5a.md](docs/12-deployment-guide-phase5a.md) lists them |
+| Phases 5b and 5c: approval through the operations agent, confirmation and record | Planned; see the roadmap |
 
 "What has and has not been verified" in [docs/00-architecture.md](docs/00-architecture.md) has the details.
 
@@ -45,6 +46,7 @@ The site, Northwind Ridge Wind Farm, is fictional: 12 turbines of 4.2 MW on proc
 | [docs/09-deployment-guide-phase3.md](docs/09-deployment-guide-phase3.md) | Phase 3: data agent and its test, ontology, operations agent, and how to show them |
 | [docs/10-ontology.md](docs/10-ontology.md) | The ontology's entity types, properties and relationships with the tables behind them |
 | [docs/11-deployment-guide-phase4.md](docs/11-deployment-guide-phase4.md) | Phase 4: create the Fabric app, deploy it, check its connections, show it |
+| [docs/12-deployment-guide-phase5a.md](docs/12-deployment-guide-phase5a.md) | Phase 5a: send a command from Fabric to a turbine and see it take effect |
 | [app/README.md](app/README.md) | The twin: what is in the folder, how it gets its values, what the picture means |
 | [docs/06-upgrade-from-first-delivery.md](docs/06-upgrade-from-first-delivery.md) | Bring a deployment of the first version up to this one |
 | [docs/02-demo-runbook.md](docs/02-demo-runbook.md) | How to inject a fault, what to show, and the story in the history behind it |
@@ -53,7 +55,7 @@ The site, Northwind Ridge Wind Farm, is fictional: 12 turbines of 4.2 MW on proc
 | [docs/00-architecture.md](docs/00-architecture.md) | The whole solution across all phases, design decisions, security, what was verified |
 | [docs/data-contracts.md](docs/data-contracts.md) | Topics, message formats, commands, reference files, history tables column by column |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | What to check when a step does not behave as described |
-| [docs/03-roadmap.md](docs/03-roadmap.md) | Phases 4 and 5, and what Phases 2 and 3 delivered |
+| [docs/03-roadmap.md](docs/03-roadmap.md) | Phase 5, further options, and what Phases 2 to 4 delivered |
 | [docs/phase1-validation-log.md](docs/phase1-validation-log.md), [docs/phase2-validation-log.md](docs/phase2-validation-log.md), [docs/phase3-validation-log.md](docs/phase3-validation-log.md), [docs/phase4-validation-log.md](docs/phase4-validation-log.md) | The obstacles of the live deployments and what was changed for each; for Phase 3, what was checked before its first run |
 
 ## Repository layout
@@ -81,8 +83,8 @@ The site, Northwind Ridge Wind Farm, is fictional: 12 turbines of 4.2 MW on proc
 On the workstation, in the root folder of the repository:
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m
-./infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh     # gearbox degradation on WT-07, clears by itself after 15 minutes
+bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m
+bash infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh     # gearbox degradation on WT-07, clears by itself after 15 minutes
 ```
 
 In Fabric, the validation queries show WT-07's gearbox vibration and oil temperature pulling away from its neighbours, the alarms, the controller derating the turbine, the production gap, and the return to normal. The question bank then shows that this was coming: four months of drift, rising iron in the oil, the same failure on WT-02 a year earlier, an inspection planned in two weeks and a warranty that ends on 31 December.
@@ -92,7 +94,7 @@ In Fabric, the validation queries show WT-07's gearbox vibration and oil tempera
 ```bash
 cd simulator
 pip install -r requirements-dev.txt
-python -m pytest                                                              # 86 tests
+python -m pytest                                                              # 88 tests
 SITE_FILE=../data/reference/site.json SINK=stdout python -m windfarm_sim | head -n 20   # live messages
 python -m windfarm_sim.history --site ../data/reference/site.json --out /tmp/history    # two years of history as CSV
 cd .. && bash tools/script-tests/run.sh                                       # the shell scripts against stand-in commands

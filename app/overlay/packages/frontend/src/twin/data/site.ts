@@ -92,9 +92,15 @@ export function powerCurve(windSpeed: number): number {
   return m.ratedPowerKw * share;
 }
 
-/** How serious the gearbox of a turbine looks: 0 healthy, 1 early warning, 2 at the level of an alarm. */
-export function gearboxLevel(vibration: number, oilTemp: number): 0 | 1 | 2 {
-  if (vibration >= ALARM_VIBRATION || oilTemp >= ALARM_OIL_TEMP) return 2;
-  if (vibration >= EARLY_VIBRATION || oilTemp >= EARLY_OIL_TEMP) return 1;
-  return 0;
+/**
+ * Whether the gearbox readings of a turbine are worth watching: 1 from the early warning on, 0 below it.
+ *
+ * The readings alone never say "alarm". The turbine controller compares a short average with its limit
+ * and, for vibration, waits 15 seconds before it raises one, so a single reading of 5.6 mm/s is no alarm.
+ * A small fault at a fresh wind produces such readings every minute or so; a twin that turned red on
+ * each of them would flicker and would contradict its own alarm list. Red comes from the alarms of the
+ * controller: `gearboxCondition` in `components.ts`.
+ */
+export function gearboxWatch(vibration: number, oilTemp: number): 0 | 1 {
+  return vibration >= EARLY_VIBRATION || oilTemp >= EARLY_OIL_TEMP ? 1 : 0;
 }

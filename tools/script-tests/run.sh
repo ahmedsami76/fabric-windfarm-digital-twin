@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Scenario tests for infra/vm.sh, infra/01-create-edge-vm.sh, infra/99-cleanup.sh, app/create-app.sh and
-# the checks on where a script runs. Nothing here touches Azure or a VM: the commands az, ssh, scp, curl and a
+# Scenario tests for infra/vm.sh, infra/01-create-edge-vm.sh, infra/99-cleanup.sh, app/create-app.sh,
+# app/create-principal.sh, tools/check-scripts.sh and the checks on where a script runs. Nothing here touches Azure or a VM: the commands az, ssh, scp, curl and a
 # few others are replaced by the stand-ins in tools/script-tests/stubs, which answer from
 # files in a scratch folder and log every call.
 #   bash tools/script-tests/run.sh
@@ -413,11 +413,20 @@ check "create-principal, the tenant does not allow app registrations: stops and 
 pr_reset; touch "$STUB_DIR/role_refused"; pr_run
 check "create-principal, no right to give the role: stops before a secret is made, and says where to do it by hand" 1 "The role was not given" "Manage access" "!credential reset"
 
+pr_reset; echo 2 > "$STUB_DIR/principal_unknown"; OUT="$(PATH="$HERE/stubs-principal:$PATH" ROLE_WAIT_SECONDS=0 bash "$PRINCIPAL" 2>&1)"; RC=$?; pr_facts
+check "create-principal, Fabric does not know the new principal yet: waits, tries again, goes on" 0 "does not know the new principal yet (try 1 of 8)" "(try 2 of 8)" 'role:"role": "Viewer"' "npx rayfin secret set" "file:gone"
+
+pr_reset; echo 99 > "$STUB_DIR/principal_unknown"; OUT="$(PATH="$HERE/stubs-principal:$PATH" ROLE_WAIT_SECONDS=0 ROLE_TRIES=3 bash "$PRINCIPAL" 2>&1)"; RC=$?
+check "create-principal, Fabric never learns the principal: stops after the tries, before a secret is made" 1 "(try 2 of 3)" "The role was not given" "principal was not found" "run this script again" "!credential reset"
+
 pr_reset; touch "$STUB_DIR/no_secrets"; pr_run; pr_facts
 check "create-principal, the tenant forbids client secrets: stops, hands nothing to the app" 1 "No secret was made" "not allowed as per assigned policy" "!rayfin secret set" "file:gone"
 
 pr_reset; touch "$STUB_DIR/rayfin_signed_out"; pr_run; pr_facts
 check "create-principal, Rayfin not signed in: stops, says what to do, leaves no file with the secret" 1 "Rayfin did not take the secrets" "npx rayfin login" "file:gone"
+
+pr_reset; echo aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee > "$STUB_DIR/appid"; echo 99999999-8888-7777-6666-555555555555 > "$STUB_DIR/spid"; pr_run --show
+check "create-principal --show, a run that stopped before the role (the first real run): says that there is no role and what to do" 0 "application ID aaaaaaaa" "Role on the workspace: none. Run this script without an option" "!credential reset" "!--method post"
 
 pr_reset; pr_run --show
 check "create-principal --show, nothing set up: says so and changes nothing" 0 "No app registration named windfarm-twin-eventhouse-reader" "!ad app create" "!--method post" "!credential"
@@ -435,5 +444,94 @@ check "create-principal with sudo: refuses" 1 "Do not run this with sudo" "!az a
 
 pr_reset; pr_run --delete
 check "create-principal, unknown option: refuses" 1 "Unknown option --delete"
+
+# --- tools/check-scripts.sh, rule 3: no guide and no hint shows a script started directly ---
+CKDIR="$SCRATCH/check"
+ck_reset() {
+  rm -rf "$CKDIR"; mkdir -p "$CKDIR"/tools "$CKDIR"/infra "$CKDIR"/edge/scripts "$CKDIR"/app "$CKDIR"/config "$CKDIR"/docs
+  cp "$REPO"/tools/check-scripts.sh "$CKDIR"/tools/
+  printf '#!/usr/bin/env bash\n# Helper.\n#   bash infra/good.sh status\necho "Next: bash infra/good.sh start"\n' > "$CKDIR"/infra/good.sh
+  printf 'Run `bash infra/good.sh status`.\n' > "$CKDIR"/docs/guide.md
+  : > "$STUB_DIR/calls.log"
+}
+ck_run() { run bash "$CKDIR"/tools/check-scripts.sh; }
+
+ck_reset; ck_run
+check "check-scripts, every command through bash, scripts without the execute permission: passes" 0 "ok   infra/good.sh" "ok   docs/guide.md" "!FAIL"
+
+ck_reset; printf 'Then:\n\n```bash\n./infra/good.sh status\n```\n' >> "$CKDIR"/docs/guide.md; ck_run
+check "check-scripts, a guide starts a script directly: fails and names the line" 1 "FAIL rule 3: docs/guide.md" "5:./infra/good.sh status"
+
+ck_reset; printf 'Start it with `./infra/good.sh ssh bash ./edge/scripts/x.sh`.\n' >> "$CKDIR"/docs/guide.md; ck_run
+check "check-scripts, a direct start inside a sentence: fails" 1 "FAIL rule 3: docs/guide.md"
+
+ck_reset; printf 'echo "Connect with: ./infra/good.sh ssh"\n' >> "$CKDIR"/infra/good.sh; ck_run
+check "check-scripts, a hint of a script shows the direct form: fails" 1 "FAIL rule 3: infra/good.sh" "Connect with: ./infra/good.sh ssh"
+
+ck_reset; printf '#!/usr/bin/env bash\n#   infra/usage.sh status      what it does\necho ok\n' > "$CKDIR"/infra/usage.sh; ck_run
+check "check-scripts, a usage line without bash in front: fails" 1 "FAIL rule 3: infra/usage.sh" "infra/usage.sh status"
+
+ck_reset; printf 'Type `bash infra/good.sh status`, not `./infra/good.sh status`.\n\n```text\nbash: ./infra/good.sh: Permission denied\n```\n\nFrom the workstation: `bash infra/good.sh ssh bash ./edge/scripts/x.sh`.\n' >> "$CKDIR"/docs/guide.md; ck_run
+check "check-scripts, the mistake named as a mistake, the error text, and bash ./ on the VM: pass" 0 "ok   docs/guide.md" "!FAIL"
+
+ck_reset; printf 'bash: ./infra/vm.sh: Permission denied, then I typed ./infra/vm.sh status\n' > "$CKDIR"/docs/phase9-validation-log.md; ck_run
+check "check-scripts, a validation log is a record and is not checked" 0 "!validation-log" "!FAIL"
+
+ck_reset; printf '"$REPO_ROOT/infra/good.sh" status\n' > "$CKDIR"/infra/caller.sh; ck_run
+check "check-scripts, a script starts another one directly: rule 2 still fails" 1 "FAIL rule 2: infra/caller.sh"
+
+# ---- infra/08-create-command-path.sh: the path for commands from Fabric to the edge (Phase 5a). az is a
+# stand-in (stubs-commands) for the Fabric API and for the data flow commands of Azure IoT Operations.
+chmod +x "$HERE"/stubs-commands/*
+cp_reset() { reset; rm -rf "$REPO/edge/dataflows/rendered"; }
+cp_run() { OUT="$(PATH="$HERE/stubs-commands:$PATH" bash "$REPO"/infra/08-create-command-path.sh "$@" 2>&1)"; RC=$?; }
+cp_facts() { OUT="$OUT
+applied:$(tr -d ' \n' < "$STUB_DIR/applied.json" 2>/dev/null) definition:$(python3 -c 'import base64, json, sys
+body = json.load(open(sys.argv[1])); part = body["definition"]["parts"][0]
+print(body["displayName"], part["path"], part["payloadType"], json.dumps(json.loads(base64.b64decode(part["payload"])), separators=(",", ":")))' "$STUB_DIR/posted.json" 2>/dev/null)"; }
+
+cp_reset; cp_run; cp_facts
+check "command path, nothing there: eventstream from its definition, endpoint with the consumer group, data flow from Kafka to the control topic" 0 \
+  "Creating the eventstream" "--method post --url https://api.fabric.microsoft.com/v1/workspaces/638251b5-0826-4632-b8f1-642e05d39629/eventstreams" \
+  'definition:WindFarmCommands eventstream.json InlineBase64 {"sources":\[{"name":"CommandIn","type":"CustomEndpoint","properties":{}}\],"destinations":\[{"name":"CommandOut","type":"CustomEndpoint","properties":{},"inputNodes":\[{"name":"WindFarmCommands-stream"}\]}\],"streams":\[{"name":"WindFarmCommands-stream","type":"DefaultStream","properties":{},"inputNodes":\[{"name":"CommandIn"}\]}\]' \
+  "iot ops dataflow endpoint create fabric-realtime .*--name fabric-commands --host esehns-abc123.servicebus.windows.net:9093 --auth-type SystemAssignedManagedIdentity --group-id CommandOut-cg" \
+  "iot ops dataflow apply .*--profile default --name fabric-to-windfarm-control" \
+  'applied:{"mode":"Enabled","operations":\[{"operationType":"Source","sourceSettings":{"endpointRef":"fabric-commands","serializationFormat":"Json","dataSources":\["es_0f0f0f0f"\]}},{"operationType":"Destination","destinationSettings":{"endpointRef":"default","dataDestination":"contoso/windfarm/northwind-ridge/_control/request"}}\]}' \
+  "bash infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh" "!K3y" "!SharedAccessKey"
+
+cp_reset; touch "$STUB_DIR/eventstream"; cp_run
+check "command path, an eventstream of that name exists (made by hand): used as it is, not created again" 0 "It exists: eeeeeeee" "!--method post" "iot ops dataflow endpoint create fabric-realtime" "iot ops dataflow apply"
+
+cp_reset; touch "$STUB_DIR/create_refused"; cp_run
+check "command path, Fabric refuses the definition: says what Fabric said and how to make it by hand, changes nothing on the edge" 3 \
+  "Fabric did not create the eventstream from its definition. It said: .*InvalidDefinition" "Add source, Custom endpoint, name CommandIn" "Add destination, Custom endpoint, name CommandOut" "Then run this script again" "!iot ops dataflow"
+
+cp_reset; touch "$STUB_DIR/eventstream" "$STUB_DIR/no_destination"; cp_run
+check "command path, the eventstream has no custom endpoint to read from: stops before the edge" 3 "no custom endpoint as a destination" "Add destination, Custom endpoint" "!iot ops dataflow"
+
+cp_reset; echo 2 > "$STUB_DIR/connection_not_ready"; cp_run
+check "command path, the connection of a new destination is not ready at once: asks again and goes on" 0 "The edge reads from: esehns-abc123.servicebus.windows.net:9093" "iot ops dataflow apply"
+
+cp_reset; echo 99 > "$STUB_DIR/connection_not_ready"; touch "$STUB_DIR/eventstream"; cp_run
+check "command path, the connection never comes: stops with what Fabric said" 1 "Fabric did not give the connection of the destination: .*not ready" "!iot ops dataflow"
+
+cp_reset; cp_run --show
+check "command path --show, nothing there: says so and changes nothing" 0 "Eventstream: none" "!--method post" "!iot ops"
+
+cp_reset; cp_run; : > "$STUB_DIR/calls.log"; cp_run --show
+check "command path --show, all there: eventstream, what the edge reads from, endpoint and data flow; changes nothing" 0 \
+  "It exists: eeeeeeee" "consumer group:     CommandOut-cg" "fabric-commands .*Succeeded" "fabric-to-windfarm-control .*Enabled" "!--method post" "!endpoint create" "!dataflow apply" "!K3y"
+
+: > "$STUB_DIR/calls.log"; cp_run --remove
+check "command path --remove: data flow, endpoint, eventstream, and a word on turbines still curtailed" 0 \
+  "iot ops dataflow delete .*--name fabric-to-windfarm-control" "iot ops dataflow endpoint delete .*--name fabric-commands" \
+  "--method delete --url https://api.fabric.microsoft.com/v1/workspaces/638251b5-0826-4632-b8f1-642e05d39629/eventstreams/eeeeeeee" "simctl.sh release all"
+
+cp_reset; touch "$STUB_DIR/no_workspace"; cp_run
+check "command path, the workspace is not visible to the sign-in: stops and names the setting" 1 "No workspace named WindFarmDigitalTwin" "FABRIC_WORKSPACE_NAME" "!--method post" "!iot ops"
+
+cp_reset; cp_run --delete
+check "command path, unknown option: refuses" 1 "Unknown option --delete" "!az rest"
+rm -rf "$REPO/edge/dataflows/rendered"
 
 echo; echo "passed $pass, failed $fail"; [[ $fail -eq 0 ]]

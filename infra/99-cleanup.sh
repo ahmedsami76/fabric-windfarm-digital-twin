@@ -2,14 +2,14 @@
 # Clean-up (run on your workstation or in Azure Cloud Shell, signed in as yourself).
 # Removes what a deployment of this repository created, in Azure and in Fabric.
 #
-#   infra/99-cleanup.sh                     show what exists and what would be removed; changes nothing
-#   infra/99-cleanup.sh --azure             uninstall Azure IoT Operations, remove the VM identity's role
-#                                           assignments, delete the resource group with everything in it
-#   infra/99-cleanup.sh --fabric            delete the demo's items in the Fabric workspace (eventstream,
-#                                           Eventhouse, Lakehouse, notebooks) and the workspace access of
-#                                           the two edge identities; other items are left alone
-#   infra/99-cleanup.sh --fabric-workspace  delete the whole Fabric workspace instead
-#   infra/99-cleanup.sh --all               --fabric, then --azure
+#   bash infra/99-cleanup.sh                     show what exists and what would be removed; changes nothing
+#   bash infra/99-cleanup.sh --azure             uninstall Azure IoT Operations, remove the VM identity's role
+#                                                assignments, delete the resource group with everything in it
+#   bash infra/99-cleanup.sh --fabric            delete the demo's items in the Fabric workspace (eventstream,
+#                                                Eventhouse, Lakehouse, notebooks) and the workspace access of
+#                                                the two edge identities; other items are left alone
+#   bash infra/99-cleanup.sh --fabric-workspace  delete the whole Fabric workspace instead
+#   bash infra/99-cleanup.sh --all               --fabric, then --azure
 #
 #   --yes        do not ask for confirmation
 #   --no-wait    start the deletion of the resource group and return at once
@@ -63,8 +63,8 @@ fi
 : "${VM_NAME:=vm-windfarm-edge}" "${CLUSTER_NAME:=arc-windfarm-edge}" "${AIO_INSTANCE_NAME:=aio-windfarm}"
 : "${STORAGE_ACCOUNT_NAME:=}" "${FABRIC_WORKSPACE_NAME:=WindFarmDigitalTwin}" "${FABRIC_LAKEHOUSE_NAME:=WindFarmLH}"
 # Fixed names from the deployment guide. Set them in front of the command if you chose others.
-: "${EVENTHOUSE_NAME:=WindFarmEH}" "${EVENTSTREAM_NAME:=es-windfarm-edge}"
-NOTEBOOK_NAMES="01_load_reference_data 02_generate_history 03_refresh_forecast 04_question_bank"
+: "${EVENTHOUSE_NAME:=WindFarmEH}" "${EVENTSTREAM_NAME:=es-windfarm-edge}" "${COMMAND_EVENTSTREAM_NAME:=WindFarmCommands}"
+NOTEBOOK_NAMES="01_load_reference_data 02_generate_history 03_refresh_forecast 04_question_bank 12_send_edge_command"
 # How long to wait for a stopped VM to bring the cluster back online, in minutes.
 : "${CONNECT_WAIT_MINUTES:=10}"
 # How often the uninstall is tried while Azure cannot reach the cluster, and the pause in between.
@@ -351,12 +351,12 @@ find_workspace() {
 #   action "delete": an item of the demo; "with-parent": removed together with its parent;
 #   "keep": not created by the demo.
 PY_ITEMS='import json, sys
-eventhouse, eventstream, lakehouse = sys.argv[1], sys.argv[2], sys.argv[3]
+eventhouse, eventstreams, lakehouse = sys.argv[1], set(sys.argv[2].split()), sys.argv[3]
 notebooks = set(sys.argv[4].split())
 order = {"Eventstream": 1, "Notebook": 2, "KQLQueryset": 3, "Lakehouse": 4, "Eventhouse": 5}
 for item in json.load(sys.stdin):
     kind, name = item.get("type", ""), item.get("displayName", "")
-    ours = ((kind == "Eventstream" and name == eventstream) or (kind == "Notebook" and name in notebooks)
+    ours = ((kind == "Eventstream" and name in eventstreams) or (kind == "Notebook" and name in notebooks)
             or (kind == "KQLQueryset" and name.startswith(eventhouse)) or (kind == "Lakehouse" and name == lakehouse)
             or (kind == "Eventhouse" and name == eventhouse))
     child = ((kind == "KQLDatabase" and name == eventhouse)
@@ -366,7 +366,7 @@ for item in json.load(sys.stdin):
 workspace_items() {
   local all
   all="$(fabric_list "workspaces/$1/items")" || return 1
-  python3 -c "$PY_ITEMS" "$EVENTHOUSE_NAME" "$EVENTSTREAM_NAME" "$FABRIC_LAKEHOUSE_NAME" "$NOTEBOOK_NAMES" <<< "$all" | sort
+  python3 -c "$PY_ITEMS" "$EVENTHOUSE_NAME" "$EVENTSTREAM_NAME $COMMAND_EVENTSTREAM_NAME" "$FABRIC_LAKEHOUSE_NAME" "$NOTEBOOK_NAMES" <<< "$all" | sort
 }
 
 # One line per identity of the edge that has access to the workspace: id <TAB> name <TAB> role
@@ -391,7 +391,7 @@ edge_access() {
 fabric_by_hand() {
   warn "The Fabric REST API could not be used from this session: $(tr '\n' ' ' < "$FABRIC_ERR_FILE" | cut -c1-300)"
   info "That is common in Azure Cloud Shell. Do this part in the Fabric portal instead, in workspace $FABRIC_WORKSPACE_NAME:"
-  info "  1. Delete, in this order: eventstream $EVENTSTREAM_NAME; the notebooks; the KQL queryset of $EVENTHOUSE_NAME;"
+  info "  1. Delete, in this order: eventstreams $EVENTSTREAM_NAME and $COMMAND_EVENTSTREAM_NAME; the notebooks; the KQL queryset of $EVENTHOUSE_NAME;"
   info "     Lakehouse $FABRIC_LAKEHOUSE_NAME; Eventhouse $EVENTHOUSE_NAME. (Menu ... of each item, Delete.)"
   info "  2. Manage access: remove $VM_NAME and the identity whose name starts with azure-iot-operations-."
   info "  Or delete the whole workspace: Workspace settings, General, Remove this workspace."

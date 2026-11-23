@@ -1,7 +1,7 @@
 // =====================================================================================
 // Wind farm digital twin: the queries of the app of Phase 4
 //
-// These are the four queries the functions of the Fabric app run, word for word
+// These are the queries the functions of the Fabric app run, word for word
 // (app/overlay/packages/functions/src/live.ts; a test compares the two). Run them here
 // to see what the app sees. Each block is one query: put the cursor in it and select Run.
 // =====================================================================================
@@ -32,3 +32,13 @@ TurbineTelemetry
 
 // 5. What the connection check of the app runs. Expected: about 24 rows from 12 turbines.
 TurbineTelemetry | where Timestamp > ago(2m) | summarize Rows = count(), Turbines = dcount(TurbineId), Newest = max(Timestamp)
+
+// 6. How long a reading takes from the turbine to this database: the time the row arrived minus
+//    the time the turbine put on it. The connection check of the app prints this line. The page
+//    calls its values stale when the newest one is older than 2 minutes (STALE_AFTER_S in
+//    app/overlay/packages/frontend/src/twin/data/provider.ts); Highest should stay well below that.
+//    One reading of the age on the page of the deployed app, on 23 November 2026: 56 seconds.
+TurbineTelemetry
+| where Timestamp > ago(15m)
+| extend DelayS = datetime_diff('second', IngestedAt, Timestamp)
+| summarize Rows = count(), Median = percentile(DelayS, 50), P95 = percentile(DelayS, 95), Highest = max(DelayS)

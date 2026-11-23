@@ -40,7 +40,7 @@ Phase 3 lets people ask the wind farm questions in plain language, gives the dat
 - You are an Admin of the workspace, and a Fabric administrator can change tenant settings (step 2).
 - You have Microsoft Teams with the same account.
 - The archive of this version is unpacked on the computer where your browser runs.
-- If you merge an update archive into an existing copy, unpack it inside WSL: `unzip -o ARCHIVE.zip -d ~/fabric-windfarm-digital-twin`. Unpacked or copied through Windows, the scripts lose their execute permission, and `./infra/vm.sh` answers `Permission denied`. `bash tools/check-scripts.sh` reports a script that lost it, with the command that cures it.
+- If you merge an update archive into an existing copy, unpack it inside WSL: `python3 -m zipfile -e ARCHIVE.zip ~/fabric-windfarm-digital-twin` (`unzip` is missing on a fresh Ubuntu). A merged copy has no execute permission on the script files. That does not matter as long as a script is started through `bash`, as every command in this guide is: `bash infra/vm.sh status`, not `./infra/vm.sh status`.
 
 Time: about two hours, of which 30 to 40 minutes are waiting for notebooks.
 
@@ -264,15 +264,32 @@ I have not seen a generated playbook. The table of rules is what the instruction
 
 **A fault the controller does not report.** This is the case the agent exists for.
 
-**[Workstation]**
+**[Workstation]** The case shows best at a wind of 7 to 9 m/s; the table below says why. If the site is outside that range, set the wind first. It returns to the site's weather after the hour.
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh WT-03 gearbox_degradation 0.2 30m
+bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 8.5 --duration 60m
+```
+
+Then start the fault:
+
+```bash
+bash infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh WT-03 gearbox_degradation 0.2 30m
 ```
 
 The command answers with the new fault: `"intensity": 0.0`, `"remainingSeconds": 1800`. It starts at zero and ramps in, and the agent looks once every five minutes, so nothing can arrive in the first five minutes.
 
-A fault of severity 0.2 raises the gearbox vibration of WT-03 from about 1.5 to between 4 and 5 mm/s. The controller alarms at 5.5 mm/s, so it stays silent on vibration. In the simulator, the three wind speeds I tested gave no vibration alarm at all; at 13 m/s the oil temperature alarm came up.
+A fault of severity 0.2 raises the gearbox vibration of WT-03 from about 1.5 mm/s to an average between 4 and 5 mm/s. The controller alarms when a short average stays above 5.5 mm/s for 15 seconds, so it stays silent on vibration: no vibration alarm in 23 runs of the simulator at winds of 6 to 16 m/s.
+
+How clearly the case shows depends on the wind, because a gearbox that works harder vibrates more and runs hotter. Measured in those runs, and on 23 November 2026 in the deployment:
+
+| Wind | Vibration of WT-03 with the fault | Controller |
+|---|---|---|
+| 6 m/s | Average 3.7 to 4.1 mm/s; above 4.0 for 40 to 65 % of the readings | Silent. The agent's rule may take longer to fire |
+| 7 to 9 m/s | Average 4.0 to 4.6 mm/s; above 4.0 for 55 to 93 % of the readings; a rare single reading passes 5.5 | Silent |
+| 10 to 11 m/s | Average 4.4 to 4.8 mm/s; up to two readings in a hundred pass 5.5 (5.54 was read at 9.5 m/s in the deployment) | Silent on vibration. The oil temperature alarm at 78 °C came up in 2 of 6 runs |
+| 13 m/s and more | Average 4.8 to 5.0 mm/s; single readings up to 6.0 | Silent on vibration. The oil temperature alarm came up in every run |
+
+At 7 to 9 m/s the controller reports nothing and the agent does. In a stronger wind the controller's oil temperature alarm joins in, which is a true picture of the plant and a different story.
 
 | Minutes after the command | What happens | Where to look |
 |---|---|---|
@@ -372,7 +389,7 @@ Then ask the data agent: `Which turbine stands out from the fleet right now on g
 | An answer reads "Unexpected error: Service Unavailable" or "There's content here I can't work with" | The service, not the agent. Ask again |
 | The agent says a table has no rows or does not exist, and the table is there | It happens in one run and not in the next. Ask again. If it repeats for the same question, send me the query under the answer |
 | Operations agent: **No playbook generated**, with "Provide or confirm the data source for …" | The instructions ask for something that is not a column. Step 9, point 4 |
-| `./infra/vm.sh: Permission denied` | The scripts lost their execute permission when the files were copied. `chmod +x infra/*.sh edge/scripts/*.sh config/load-env.sh tools/*.sh`. Unpack archives inside WSL, not in Windows |
+| `./infra/vm.sh: Permission denied` | The command started the script file directly, and a copied or merged file has no execute permission. Start it through `bash`: `bash infra/vm.sh …`, the form every command in this guide has |
 
 ## Remove Phase 3
 

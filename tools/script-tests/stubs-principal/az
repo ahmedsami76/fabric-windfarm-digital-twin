@@ -16,6 +16,9 @@ case "$args" in
       cat "$S/roles.json" 2>/dev/null || echo '{"value": []}' ;;
   "rest --resource https://api.fabric.microsoft.com --method post --url https://api.fabric.microsoft.com/v1/workspaces/$WS/roleAssignments --body "*)
       [[ ! -f "$S/role_refused" ]] || { echo "ERROR: (InsufficientPrivileges) The caller does not have sufficient permissions" >&2; exit 1; }
+      # A principal that Fabric does not know yet: refused this many times, then accepted.
+      left="$(cat "$S/principal_unknown" 2>/dev/null || echo 0)"
+      if (( left > 0 )); then echo $((left - 1)) > "$S/principal_unknown"; echo "ERROR: (PrincipalNotFound) The requested principal was not found" >&2; exit 1; fi
       body="$(echo "$args" | sed -E 's/.*--body (.*) --output none/\1/')"
       python3 -c 'import json,sys; b=json.loads(sys.argv[1]); print(json.dumps({"value": [{"id": b["principal"]["id"], "principal": b["principal"], "role": b["role"]}]}))' "$body" > "$S/roles.json" ;;
   "rest --resource https://api.fabric.microsoft.com --method delete --url https://api.fabric.microsoft.com/v1/workspaces/$WS/roleAssignments/"*) rm -f "$S/roles.json" ;;

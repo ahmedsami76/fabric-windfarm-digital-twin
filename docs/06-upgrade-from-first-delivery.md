@@ -10,7 +10,7 @@ Allow 45 minutes. If you start from nothing, follow [01-deployment-guide-phase1.
 
 | Area | First delivery | After the upgrade |
 |---|---|---|
-| Working with the VM | `ssh azureuser@…` and `scp` by hand; SSH lost when just-in-time access took over | `./infra/vm.sh ssh` and `./infra/vm.sh push`, which open access themselves |
+| Working with the VM | `ssh azureuser@…` and `scp` by hand; SSH lost when just-in-time access took over | `bash infra/vm.sh ssh` and `bash infra/vm.sh push`, which open access themselves |
 | Simulator | 1.0.0: wind drifts between random levels; every start draws new turbines | 1.1.0: the wind follows the site's weather, with seasons and a daily cycle; the turbines keep their character; WT-05, WT-07 and WT-09 carry a standing condition; alarms are cleared when the simulator stops; the broker's certificate is read at every connect |
 | Eventhouse | `ActiveAlarms()` shows an alarm for ever when the simulator stopped while it was raised | `ActiveAlarms()` ignores alarms from before the simulator's latest start |
 | Reference data | 12 tables, with four work orders in `ref_maintenance_history` | 13 tables: contracts, people, warranty dates and 40 alarm codes added; `ref_maintenance_history` removed |
@@ -24,13 +24,14 @@ The tables of the Eventhouse do not change, and the live data you have collected
 **[Workstation]** In Cloud Shell, upload the new `fabric-windfarm-digital-twin.zip` with **Manage files**, **Upload**. If an archive of the same name is still there, delete it first (`rm -f ~/fabric-windfarm-digital-twin.zip`).
 
 ```bash
-cd ~
-mv fabric-windfarm-digital-twin fabric-windfarm-digital-twin-v1
-unzip -q fabric-windfarm-digital-twin.zip
-cd fabric-windfarm-digital-twin
-chmod +x infra/*.sh edge/scripts/*.sh tools/*.sh
+cd ~ &&
+mv fabric-windfarm-digital-twin fabric-windfarm-digital-twin-v1 &&
+python3 -m zipfile -e fabric-windfarm-digital-twin.zip . &&
+cd fabric-windfarm-digital-twin &&
 cp ../fabric-windfarm-digital-twin-v1/config/demo.env config/demo.env
 ```
+
+The lines are chained with `&&`, so that a line that fails stops the rest.
 
 The last line carries your settings over. If the old folder is gone (a Cloud Shell without storage loses its files), take the settings from the VM instead; the address of the VM is on its **Overview** page in the Azure portal:
 
@@ -42,8 +43,7 @@ scp "azureuser@${VM_IP}:fabric-windfarm-digital-twin/config/demo.env" config/dem
 Then set the simulator version in `config/demo.env`:
 
 ```bash
-sed -i 's/^SIM_IMAGE=.*/SIM_IMAGE="windfarm-simulator:1.1.0"/' config/demo.env
-grep SIM_IMAGE config/demo.env
+sed -i 's/^SIM_IMAGE=.*/SIM_IMAGE="windfarm-simulator:1.1.0"/' config/demo.env && grep SIM_IMAGE config/demo.env
 ```
 
 Also unpack the new archive on the computer where your browser runs: you import the notebooks and paste one KQL script from there.
@@ -51,20 +51,20 @@ Also unpack the new archive on the computer where your browser runs: you import 
 **Check.**
 
 ```bash
-./infra/vm.sh status
+bash infra/vm.sh status
 ```
 
 It shows the power state, the address, the daily shutdown and whether SSH is open to you. Two things to act on:
 
-- **Power state is not "VM running":** run `./infra/vm.sh start` and wait 5 minutes.
-- **Daily shutdown at 02:00 UTC:** that was the default of the first delivery, and it is 20:00 in Houston. Move it to a time when you sleep, for example `./infra/vm.sh shutdown 0800`, and set `VM_AUTO_SHUTDOWN_UTC="0800"` in `config/demo.env`.
+- **Power state is not "VM running":** run `bash infra/vm.sh start` and wait 5 minutes.
+- **Daily shutdown at 02:00 UTC:** that was the default of the first delivery, and it is 20:00 in Houston. Move it to a time when you sleep, for example `bash infra/vm.sh shutdown 0800`, and set `VM_AUTO_SHUTDOWN_UTC="0800"` in `config/demo.env`.
 
 ## Step 2: Copy the repository to the VM
 
 **[Workstation]**
 
 ```bash
-./infra/vm.sh push
+bash infra/vm.sh push
 ```
 
 If port 22 is closed, the command asks for just-in-time access, or moves the SSH rule to your address, and then copies. It replaces the repository's folders on the VM, including `config/demo.env`, and gives the scripts their execute permission.
@@ -72,7 +72,7 @@ If port 22 is closed, the command asks for just-in-time access, or moves the SSH
 **Check.**
 
 ```bash
-./infra/vm.sh ssh grep SIM_IMAGE config/demo.env
+bash infra/vm.sh ssh grep SIM_IMAGE config/demo.env
 ```
 
 It prints `SIM_IMAGE="windfarm-simulator:1.1.0"`.
@@ -82,19 +82,19 @@ It prints `SIM_IMAGE="windfarm-simulator:1.1.0"`.
 **[Workstation, on the VM]** Let a running fault finish first, or end it:
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/simctl.sh resolve all
+bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh resolve all
 ```
 
 Then build and start version 1.1.0. It takes a few minutes; live data pauses while the simulator restarts.
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/05-deploy-simulator.sh
+bash infra/vm.sh ssh bash ./edge/scripts/05-deploy-simulator.sh
 ```
 
 **Check.**
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/simctl.sh status
+bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh status
 ```
 
 The first two lines show `simulator 1.1.0` and `wind model climate`, and the last line names three standing conditions: `WT-05 yaw_offset, WT-07 gearbox_wear, WT-09 blade_erosion`.
@@ -118,7 +118,7 @@ It returns no rows, unless a fault is running. Alarms that were left "active" by
 **[Workstation, on the VM]**
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/07-sync-reference-data.sh
+bash infra/vm.sh ssh bash ./edge/scripts/07-sync-reference-data.sh
 ```
 
 **Check [Fabric].** `Files/reference` in the Lakehouse now also holds `contracts.csv` and `technicians.csv`. The file `maintenance_history.csv` of the first delivery is still there and no longer used; delete it in the Lakehouse.
@@ -146,7 +146,7 @@ Steps 7.5 to 7.9 of the deployment guide describe the notebooks in more detail.
 **[Fabric]** In the KQL database, run question OP-08 from `fabric/kql/92-question-bank-live.kql`. It compares each gearbox with the fleet over the last 15 minutes. WT-07 is at or near the top for vibration, as it is in question RE-05 of the notebook over the last 30 days of history. If the wind is low, set it first:
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m
+bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m
 ```
 
 ## What you will notice afterwards

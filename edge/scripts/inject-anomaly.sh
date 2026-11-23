@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One command for the demo: inject an anomaly that resolves by itself.
-#   edge/scripts/inject-anomaly.sh                       # WT-07, gearbox_degradation, 0.8, 15m
-#   edge/scripts/inject-anomaly.sh WT-03 generator_overheat 0.9 20m
+#   bash edge/scripts/inject-anomaly.sh                       # WT-07, gearbox_degradation, 0.8, 15m
+#   bash edge/scripts/inject-anomaly.sh WT-03 generator_overheat 0.9 20m
 set -euo pipefail
 TURBINE="${1:-WT-07}"
 KIND="${2:-gearbox_degradation}"

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Subscribe to the wind farm topics on the Azure IoT Operations broker from a
 # diagnostic pod (run on the edge VM).
-#   edge/scripts/mqtt-peek.sh                              everything under contoso/windfarm, until Ctrl+C
-#   edge/scripts/mqtt-peek.sh 'contoso/windfarm/+/WT-07/#' one turbine, until Ctrl+C
-#   edge/scripts/mqtt-peek.sh --count 20 [TOPIC]           print 20 messages and stop (works without a
-#                                                          terminal, for example through infra/vm.sh run)
-#   edge/scripts/mqtt-peek.sh --delete                     remove the diagnostic pod
+#   bash edge/scripts/mqtt-peek.sh                              everything under contoso/windfarm, until Ctrl+C
+#   bash edge/scripts/mqtt-peek.sh 'contoso/windfarm/+/WT-07/#' one turbine, until Ctrl+C
+#   bash edge/scripts/mqtt-peek.sh --count 20 [TOPIC]           print 20 messages and stop (works without a
+#                                                               terminal, for example through bash infra/vm.sh run)
+#   bash edge/scripts/mqtt-peek.sh --delete                     remove the diagnostic pod
 set -euo pipefail
 command -v kubectl >/dev/null 2>&1 || {
-  echo "ERROR: kubectl not found. This script runs on the edge VM: connect with ./infra/vm.sh ssh" >&2
+  echo "ERROR: kubectl not found. This script runs on the edge VM: connect with bash infra/vm.sh ssh" >&2
   exit 1
 }
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { PARTS, componentQuestion, componentStatus, partOfAlarm } from '../overlay/packages/frontend/src/twin/data/components';
+import { PARTS, componentQuestion, componentStatus, gearboxCondition, partOfAlarm } from '../overlay/packages/frontend/src/twin/data/components';
 import type { Alarm, TurbineLive } from '../overlay/packages/frontend/src/twin/data/contract';
 import { createSampleProvider } from '../overlay/packages/frontend/src/twin/data/sampleProvider';
 import { WATCH_YAW_ERROR } from '../overlay/packages/frontend/src/twin/data/site';
@@ -100,6 +100,21 @@ describe('the components of a turbine', () => {
     expect(level(alarm({ turbineId: 'WT-02', component: 'yaw system', severity: 'info', code: 'YAW-UNTWIST' }), 'YAW')).toBe(0);
     expect(level(alarm({ turbineId: 'WT-09', component: 'tower' }), 'TWR')).toBe(0);
     expect(componentStatus(t, [alarm({ turbineId: 'WT-02', component: 'controller' })]).every((s) => s.level === 0)).toBe(true);
+  });
+
+  it('call the gearbox red only when the controller has an alarm on it, however high one reading is', async () => {
+    const healthy = await turbine('WT-02');
+    const noisy: TurbineLive = { ...healthy, gearboxVibration: 5.54, gearboxOilTemp: 74.3 }; // the reading of the first deployment
+    expect(gearboxCondition(healthy, [])).toBe(0);
+    expect(gearboxCondition(noisy, [])).toBe(1);
+    expect(componentStatus(noisy, []).find((s) => s.key === 'GBX')!.level).toBe(1);
+    const gearboxAlarm = alarm({ turbineId: 'WT-02', component: 'gearbox', code: 'GBX-VIB-HIGH' });
+    expect(gearboxCondition(noisy, [gearboxAlarm])).toBe(2);
+    expect(gearboxCondition(healthy, [gearboxAlarm])).toBe(2); // the alarm stands until the controller clears it
+    // Alarms of another turbine, of another component, or of severity info do not colour this gearbox.
+    expect(gearboxCondition(noisy, [alarm({ turbineId: 'WT-09', component: 'gearbox' })])).toBe(1);
+    expect(gearboxCondition(noisy, [alarm({ turbineId: 'WT-02', component: 'generator' })])).toBe(1);
+    expect(gearboxCondition(noisy, [alarm({ turbineId: 'WT-02', component: 'gearbox', severity: 'info' })])).toBe(1);
   });
 
   it('show a dash for a signal the functions do not send yet, and no mark for it', async () => {

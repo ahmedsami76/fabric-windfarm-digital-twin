@@ -53,9 +53,10 @@ browser: React + Three.js              Fabric app: functions (TypeScript)       
 | A rotor turning | The reported rotor speed, in real time: 12 rpm is one turn in five seconds |
 | A nacelle turned away from its neighbours | Its reported direction. WT-05 stands about 9 degrees off: its wind vane is not calibrated |
 | Blades turned edge-on to the wind | The turbine is not producing: stopped, idle, in maintenance or in fault |
-| Ring on the ground | The state: green running, amber derated, blue curtailed or maintenance, grey stopped, red and pulsing fault |
-| Nacelle amber | Gearbox vibration past 4.0 mm/s or oil past 72 °C: the early warning the operations agent of Phase 3 watches |
-| Nacelle red | Gearbox vibration past 5.5 mm/s or oil past 78 °C: the levels at which the turbine controller raises its first alarm on each |
+| Ring on the ground | The state, from the turbine controller: green running, amber derated, blue curtailed or maintenance, violet stopped for high wind, grey idle, paused or stopped, red and pulsing fault |
+| Halo on the ground, the wide disc around the ring | The condition of the gearbox, in the same two colours as the nacelle: amber for the early warning, red when the controller has an alarm on the gearbox. It shows on any turbine in trouble, selected or not. A turbine that still runs with a gearbox alarm has a green ring in a red halo. With the gearbox in order the halo shows only around a selected turbine, in the colour of the state |
+| Nacelle amber | A gearbox reading past 4.0 mm/s of vibration or 72 °C of oil temperature: the early warning the operations agent of Phase 3 watches. Also a single reading above the controller's own limits (5.5 mm/s, 78 °C) for which the controller has raised no alarm: it compares a short average with its limit and, for vibration, waits 15 seconds |
+| Nacelle red | The turbine controller has a warning or critical alarm on the gearbox, and the alarm list shows it. Red never comes from a reading alone, so the picture cannot contradict the alarm list |
 | White strokes in the air | The wind at the met mast: direction, and longer and faster with more wind |
 
 Two things are not to scale, on purpose: heights of the ground are drawn 2.5 times taller, and turbines 1.8 times larger. Positions are true.
@@ -111,7 +112,7 @@ Codes, levels, severities and what the controller does are those of `data/refere
 ```bash
 cd app
 npm install          # with npm 10.9.9 this stopped with an error here; npm 12 worked
-npm test             # 60 tests: site data, simulation, components, the opened turbine, the functions against stand-ins for Fabric
+npm test             # 104 tests: site data, simulation, components, the opened turbine, both routes, the functions against stand-ins for Fabric
 npm run typecheck
 npm run preview      # rebuilds preview/windfarm-twin-preview.html
 npm install --no-save playwright && npm run screenshots   # six pictures of the preview, needs Chrome

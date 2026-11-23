@@ -42,18 +42,18 @@ Every command in this guide is typed in one place: a bash shell on your workstat
 | Mark | Meaning |
 |---|---|
 | **[Workstation]** | The command runs on your workstation and works on Azure. |
-| **[Workstation, on the VM]** | You type the command on your workstation; `./infra/vm.sh ssh` carries it to the edge VM and runs it there. You see the output as if it ran locally. |
+| **[Workstation, on the VM]** | You type the command on your workstation; `bash infra/vm.sh ssh` carries it to the edge VM and runs it there. You see the output as if it ran locally. |
 | **[Fabric]** | You work in the Fabric portal. |
 
 The scripts check where they run. A script of `infra/` stops when it is started on the VM, and a script of `edge/scripts/` stops when it is started anywhere else, each with a message that says what to do.
 
-`./infra/vm.sh` is the helper for everything about the VM. Three of its actions reach the VM:
+`bash infra/vm.sh` is the helper for everything about the VM. Three of its actions reach the VM:
 
 | Action | What it does | Use it for |
 |---|---|---|
-| `./infra/vm.sh ssh COMMAND` | Runs one command on the VM, in the repository folder, over SSH. Opens SSH access first if it is closed. | Every edge step of this guide |
-| `./infra/vm.sh ssh` | Opens a shell on the VM | Looking around; commands with quotes or special characters |
-| `./infra/vm.sh run COMMAND` | Runs one command through the Azure VM agent, without SSH. Not interactive, at least 20 seconds, and only the last 4,096 bytes of output come back. | Subscriptions where you cannot get SSH at all |
+| `bash infra/vm.sh ssh COMMAND` | Runs one command on the VM, in the repository folder, over SSH. Opens SSH access first if it is closed. | Every edge step of this guide |
+| `bash infra/vm.sh ssh` | Opens a shell on the VM | Looking around; commands with quotes or special characters |
+| `bash infra/vm.sh run COMMAND` | Runs one command through the Azure VM agent, without SSH. Not interactive, at least 20 seconds, and only the last 4,096 bytes of output come back. | Subscriptions where you cannot get SSH at all |
 
 ## Step 0: Prerequisites and configuration
 
@@ -65,7 +65,7 @@ The scripts check where they run. A script of `infra/` stops when it is started 
 
 **If your subscription is managed by your organisation**, as Microsoft-internal demo subscriptions are, expect two things. Both happened in the validated run.
 
-1. *SSH is governed by just-in-time access.* Microsoft Defender for Cloud replaces the SSH rule that step 1 creates, usually within a few hours. From then on port 22 is closed until you ask for access, and each grant lasts a few hours. You do not have to do anything about this: `./infra/vm.sh ssh` and `./infra/vm.sh push` notice it and ask for access themselves. Do not create SSH rules by hand; they are removed again.
+1. *SSH is governed by just-in-time access.* Microsoft Defender for Cloud replaces the SSH rule that step 1 creates, usually within a few hours. From then on port 22 is closed until you ask for access, and each grant lasts a few hours. You do not have to do anything about this: `bash infra/vm.sh ssh` and `bash infra/vm.sh push` notice it and ask for access themselves. Do not create SSH rules by hand; they are removed again.
 2. *Not every VM size is offered.* The validated subscription was offered no v4 or v5 sizes in `southcentralus`. Step 1 tries the sizes in `VM_SIZE` in order and uses the first one that works.
 
 ### Fabric
@@ -81,7 +81,7 @@ Use either of these.
 
 | Workstation | Setup | Know before you start |
 |---|---|---|
-| **Azure Cloud Shell** (bash) | None. The Azure CLI, `ssh`, `tar` and `unzip` are there and you are signed in. | A session ends after 20 minutes without keyboard activity, also while a long command runs: press Enter now and then during step 4. Files survive between sessions only if Cloud Shell was set up with a storage account. If `ls ~/clouddrive` fails, your session is temporary: the repository, `config/demo.env` and the SSH key are gone when it ends. Set up storage first (Cloud Shell **Settings**, **Reset user settings**, then choose **Mount storage account**). Cloud Shell often may not read Microsoft Entra ID, which matters once, in step 1. |
+| **Azure Cloud Shell** (bash) | None. The Azure CLI, `ssh`, `tar` and `python3` are there and you are signed in. | A session ends after 20 minutes without keyboard activity, also while a long command runs: press Enter now and then during step 4. Files survive between sessions only if Cloud Shell was set up with a storage account. If `ls ~/clouddrive` fails, your session is temporary: the repository, `config/demo.env` and the SSH key are gone when it ends. Set up storage first (Cloud Shell **Settings**, **Reset user settings**, then choose **Mount storage account**). Cloud Shell often may not read Microsoft Entra ID, which matters once, in step 1. |
 | **Your own machine** | Linux, macOS, or Windows with WSL. Azure CLI 2.70 or later (`az version`), `ssh`, `tar`, `curl`. Sign in as a user: `az login`. | Use a user account, not a service principal. |
 
 Both validated runs started in Cloud Shell, with Azure CLI extension `azure-iot-ops` 2.11.2. The second moved to Ubuntu on WSL when Cloud Shell had lost the folder; [troubleshooting.md](troubleshooting.md) has the three commands that bring a new workstation up to date ("The workstation lost its copy…").
@@ -89,7 +89,7 @@ Both validated runs started in Cloud Shell, with Azure CLI extension `azure-iot-
 Three habits that avoid obstacles of those runs:
 
 - **Do not use `sudo`** for the scripts of this repository on the workstation. Under `sudo` the Azure CLI is a different user without your sign-in, and the SSH key lands in root's home.
-- **Keep one copy of `config/demo.env`.** After a change, `./infra/vm.sh push-env` gives the VM the same file.
+- **Keep one copy of `config/demo.env`.** After a change, `bash infra/vm.sh push-env` gives the VM the same file.
 - **In Cloud Shell, check `ls ~/clouddrive` first.** Without a storage account, everything in the home folder is gone when the session ends.
 
 ### Get the repository
@@ -99,13 +99,14 @@ Three habits that avoid obstacles of those runs:
 1. Put the archive `fabric-windfarm-digital-twin.zip` on the workstation and unpack it. In Cloud Shell: select **Manage files**, **Upload** in the toolbar, choose the zip, then:
 
    ```bash
-   cd ~
-   unzip -q fabric-windfarm-digital-twin.zip
+   cd ~ &&
+   python3 -m zipfile -e fabric-windfarm-digital-twin.zip . &&
    cd fabric-windfarm-digital-twin
-   chmod +x infra/*.sh edge/scripts/*.sh tools/*.sh
    ```
 
-   The `chmod` line gives the scripts their execute permission back. Archives that pass through Windows or a browser upload often lose it, and `./infra/…` then answers "Permission denied". If you keep the repository on GitHub, `git clone` it instead and skip the `unzip` line.
+   `python3 -m zipfile` is used because `unzip` is missing on a fresh Ubuntu, WSL included. If you keep the repository on GitHub, `git clone` it instead.
+
+   Every command in this guide starts a script through `bash` (`bash infra/vm.sh status`, not `./infra/vm.sh status`). Keep that form when you type commands of your own: an unpacked or merged copy has no execute permission on the script files, and the direct form then answers "Permission denied".
 
 2. Keep an unpacked copy on the computer where your browser runs as well. In steps 6 and 7 you paste KQL files and import notebooks into the Fabric portal from there.
 
@@ -116,8 +117,7 @@ Three habits that avoid obstacles of those runs:
 1. Create your configuration file and open it in an editor.
 
    ```bash
-   cp config/demo.env.example config/demo.env
-   nano config/demo.env
+   cp config/demo.env.example config/demo.env && nano config/demo.env
    ```
 
 2. Fill in these values. The rest have working defaults.
@@ -139,7 +139,7 @@ Three habits that avoid obstacles of those runs:
    | Setting | What it is |
    |---|---|
    | `VM_SIZE` | A list of VM sizes to try, in order. All have 8 vCPUs and 32 GB. |
-   | `VM_ADMIN` | The administrator account on the VM, `azureuser`. This is the name SSH signs in with, not your own name. `./infra/vm.sh ssh` uses it for you. |
+   | `VM_ADMIN` | The administrator account on the VM, `azureuser`. This is the name SSH signs in with, not your own name. `bash infra/vm.sh ssh` uses it for you. |
    | `AIO_SKU` | The pricing tier of Azure IoT Operations, Standard or Essentials. Blank means the default of the CLI, which is what the validated run used. |
    | `SIM_IMAGE` | The simulator image, `windfarm-simulator:1.1.0` |
 
@@ -155,7 +155,7 @@ Three habits that avoid obstacles of those runs:
 **One settings file, two places.** The VM gets a copy of `config/demo.env` in step 1. Whenever you edit the file afterwards, send it to the VM again:
 
 ```bash
-./infra/vm.sh push-env
+bash infra/vm.sh push-env
 ```
 
 ## Step 1: Create the edge VM
@@ -163,7 +163,7 @@ Three habits that avoid obstacles of those runs:
 **[Workstation]**
 
 ```bash
-./infra/01-create-edge-vm.sh
+bash infra/01-create-edge-vm.sh
 ```
 
 The script:
@@ -192,7 +192,7 @@ When it finishes:
    - In Cloud Shell, sign in again interactively and repeat the lookup:
 
      ```bash
-     az login --use-device-code
+     az login --use-device-code &&
      az ad sp show --id bc313c14-388c-4e7d-a58e-70017303ee3b --query id --output tsv
      ```
 
@@ -203,7 +203,7 @@ When it finishes:
 2. Copy the repository, with your `config/demo.env`, to the VM:
 
    ```bash
-   ./infra/vm.sh push
+   bash infra/vm.sh push
    ```
 
    Run `push` again whenever files of the repository change. It replaces the repository's folders on the VM and gives the scripts their execute permission.
@@ -211,20 +211,20 @@ When it finishes:
 **Check.**
 
 ```bash
-./infra/vm.sh status
-./infra/vm.sh ssh hostname
+bash infra/vm.sh status
+bash infra/vm.sh ssh hostname
 ```
 
 `status` shows the power state, the address, the daily shutdown and whether SSH is open to you. The second command prints `vm-windfarm-edge`.
 
-If SSH does not work in your subscription even through `./infra/vm.sh ssh`, see "SSH does not connect" in [troubleshooting.md](troubleshooting.md). Every edge step also works as `./infra/vm.sh run bash ./edge/scripts/…`, without SSH.
+If SSH does not work in your subscription even through `bash infra/vm.sh ssh`, see "SSH does not connect" in [troubleshooting.md](troubleshooting.md). Every edge step also works as `bash infra/vm.sh run bash ./edge/scripts/…`, without SSH.
 
 ## Step 2: Prepare the edge host
 
 **[Workstation, on the VM]**
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/02-prepare-host.sh
+bash infra/vm.sh ssh bash ./edge/scripts/02-prepare-host.sh
 ```
 
 The script installs the Azure CLI with the `connectedk8s` and `azure-iot-ops` extensions, K3s (without Traefik), Helm and Docker, sets the kernel limits that Azure IoT Operations requires (`fs.inotify.max_user_instances`, `fs.inotify.max_user_watches`, `fs.file-max`) and points `kubectl` at the cluster. It takes about 5 minutes.
@@ -232,7 +232,7 @@ The script installs the Azure CLI with the `connectedk8s` and `azure-iot-ops` ex
 **Check.** One node with status `Ready`:
 
 ```bash
-./infra/vm.sh ssh kubectl get nodes
+bash infra/vm.sh ssh kubectl get nodes
 ```
 
 ## Step 3: Connect the cluster to Azure Arc
@@ -240,7 +240,7 @@ The script installs the Azure CLI with the `connectedk8s` and `azure-iot-ops` ex
 **[Workstation, on the VM]**
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/03-arc-enable.sh
+bash infra/vm.sh ssh bash ./edge/scripts/03-arc-enable.sh
 ```
 
 The script signs in on the VM (managed identity or device code, according to `AZ_LOGIN_MODE`), then:
@@ -252,7 +252,7 @@ The script signs in on the VM (managed identity or device code, according to `AZ
 
 It takes 5 to 10 minutes. The script stops in three cases, each with a message that says what to do:
 
-- `CUSTOM_LOCATIONS_OID` is empty: the VM has an old copy of your settings. Run `./infra/vm.sh push-env` and start the step again.
+- `CUSTOM_LOCATIONS_OID` is empty: the VM has an old copy of your settings. Run `bash infra/vm.sh push-env` and start the step again.
 - `CUSTOM_LOCATIONS_OID` is not an object ID, for example a name. Azure would accept any value here without checking it, and the mistake would show only in step 4.
 - The Azure CLI reports that it left the custom locations feature out. In `identity` mode that happens when the Reader role of step 1 is not in force yet: wait five minutes and run the step again.
 
@@ -261,7 +261,7 @@ The warning that the CLI cannot validate the object ID and proceeds with the one
 **Check.** The table at the end shows `connectivity` as `Connected`, and the pods in the `azure-arc` namespace are `Running`:
 
 ```bash
-./infra/vm.sh ssh kubectl get pods -n azure-arc
+bash infra/vm.sh ssh kubectl get pods -n azure-arc
 ```
 
 In `identity` mode you can now remove the Reader role that step 1 gave the VM identity on the subscription. Keep the VM identity itself; step 7 uses it.
@@ -271,7 +271,7 @@ In `identity` mode you can now remove the Reader role that step 1 gave the VM id
 **[Workstation]** This step runs on the workstation, as you. The VM's identity may not create the Azure resources it needs.
 
 ```bash
-./infra/04-deploy-iot-operations.sh
+bash infra/04-deploy-iot-operations.sh
 ```
 
 The script:
@@ -290,25 +290,25 @@ If `create` stops with `Custom Locations Error: "Microsoft.ExtendedLocation" res
 
 > **In Azure Cloud Shell,** keep the tab in front and press Enter every few minutes while the script runs, or the session ends after 20 minutes. If it does end, open Cloud Shell again, wait until the resource group shows no deployment in progress in the Azure portal, and run the script again; finished parts are skipped or repeated without harm.
 
-If the script stops with "Cluster … is 'Offline'", the VM is stopped, most likely by the daily shutdown. Run `./infra/vm.sh start`, wait 5 minutes and run the script again.
+If the script stops with "Cluster … is 'Offline'", the VM is stopped, most likely by the daily shutdown. Run `bash infra/vm.sh start`, wait 5 minutes and run the script again.
 
 If the script does not print the extension name, find it in the Azure portal: open the Azure IoT Operations instance, **Overview**, field **Azure IoT Operations Arc extension**.
 
 **Check.** All pods are `Running` or `Completed`, and the MQTT broker service `aio-broker` exists.
 
 ```bash
-./infra/vm.sh ssh kubectl get pods -n azure-iot-operations
-./infra/vm.sh ssh kubectl get service aio-broker -n azure-iot-operations
+bash infra/vm.sh ssh kubectl get pods -n azure-iot-operations
+bash infra/vm.sh ssh kubectl get service aio-broker -n azure-iot-operations
 ```
 
 ## Step 5: Deploy the turbine simulator
 
-> **If SSH is closed.** Organisations remove inbound SSH rules, as happened in both validated runs. `./infra/vm.sh ssh COMMAND` then runs the command through the VM agent by itself: it prints nothing until the command has finished and shows the end of its output. Only an interactive shell, `./infra/vm.sh ssh` without a command, needs port 22.
+> **If SSH is closed.** Organisations remove inbound SSH rules, as happened in both validated runs. `bash infra/vm.sh ssh COMMAND` then runs the command through the VM agent by itself: it prints nothing until the command has finished and shows the end of its output. Only an interactive shell, `bash infra/vm.sh ssh` without a command, needs port 22.
 
 **[Workstation, on the VM]**
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/05-deploy-simulator.sh
+bash infra/vm.sh ssh bash ./edge/scripts/05-deploy-simulator.sh
 ```
 
 The script builds the simulator image with Docker, imports it into K3s, creates the `windfarm` namespace and starts the simulator. The simulator connects to the broker at `aio-broker.azure-iot-operations.svc.cluster.local:18883` with TLS and a Kubernetes service account token. It reads the broker's CA certificate from the cluster each time it connects, so a certificate that Azure IoT Operations renews does not stop it.
@@ -316,7 +316,7 @@ The script builds the simulator image with Docker, imports it into K3s, creates 
 **Check.** The log printed at the end shows `connected to broker`, followed by a status line such as `wind 9.4 m/s, site power 21840 kW, published 312, dropped 0, anomalies 0`. The simulator writes that line every 30 seconds. Then ask the simulator for its status:
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/simctl.sh status
+bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh status
 ```
 
 Expected: 12 turbines, most of them `RUNNING`, wind model `climate`, and "Active anomalies: none".
@@ -324,12 +324,12 @@ Expected: 12 turbines, most of them `RUNNING`, wind model `climate`, and "Active
 To see 20 messages as they pass the broker:
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20
+bash infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20
 ```
 
 Three turbines carry a standing condition from the first minute, because the history of step 7 says so: the gearbox of WT-07 runs warmer and rougher than the fleet, WT-05 stands about 9 degrees off the wind, and WT-09 produces about 4 percent less than its neighbours. None of them raises an alarm. They are what the analysis questions of the later phases find.
 
-The simulator's settings (publishing interval, wind, random events, seed) are in the ConfigMap at the top of `edge/k8s/simulator.yaml`. After changing them, run `./infra/vm.sh push` and this step again.
+The simulator's settings (publishing interval, wind, random events, seed) are in the ConfigMap at the top of `edge/k8s/simulator.yaml`. After changing them, run `bash infra/vm.sh push` and this step again.
 
 ## Step 6: Create the Fabric items and connect the edge
 
@@ -397,7 +397,7 @@ If the search does not find the identities, the tenant settings of step 0 are no
 **[Workstation]**
 
 ```bash
-./infra/06-connect-edge-to-fabric.sh
+bash infra/06-connect-edge-to-fabric.sh
 ```
 
 The script creates:
@@ -513,7 +513,7 @@ While OneLake availability is on, these tables cannot be cleared, renamed or hav
 **[Workstation, on the VM]**
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/07-sync-reference-data.sh
+bash infra/vm.sh ssh bash ./edge/scripts/07-sync-reference-data.sh
 ```
 
 The script uploads `data/reference` and `data/sop` to the Lakehouse folders `Files/reference` and `Files/sop`, using the VM's managed identity, which you added to the workspace in step 6.5. Run it again whenever the files change; unchanged files are skipped. Add `--dry-run` to see what it would upload.
@@ -588,13 +588,13 @@ Each cell answers one question that a site manager, a performance engineer, a re
 **[Workstation, on the VM]** Make sure there is enough wind for the fault to show, then inject it:
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m
+bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m
 ```
 
 Wait about 5 minutes for the wind to settle, then:
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh
+bash infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh
 ```
 
 The default is a gearbox degradation on WT-07 at severity 0.8 that lasts 15 minutes and then clears by itself.
@@ -672,7 +672,7 @@ Nothing has to be rebuilt after a stop. Follow this order.
 1. Stop the VM first, then pause the Fabric capacity. The other way round, the edge keeps producing events that it cannot deliver.
 
    ```bash
-   ./infra/vm.sh stop
+   bash infra/vm.sh stop
    ```
 
    The simulator clears the alarms it has raised when it shuts down, and `ActiveAlarms()` ignores alarms from before the simulator's latest start. A fault that is running when you stop leaves no alarm behind.
@@ -682,7 +682,7 @@ Nothing has to be rebuilt after a stop. Follow this order.
 1. Resume the Fabric capacity first, then start the VM. The public address is the same.
 
    ```bash
-   ./infra/vm.sh start
+   bash infra/vm.sh start
    ```
 
 2. Open the eventstream and check that the source and the Eventhouse destination are active. Fabric pauses both when the capacity is paused; if one shows as inactive, activate it.
@@ -693,7 +693,7 @@ Nothing has to be rebuilt after a stop. Follow this order.
 **What can go wrong with time**
 
 - **More than about a month stopped.** The cluster's Azure Arc identity is a certificate that is valid for 90 days and is renewed only while the cluster is online. If it expires, the Arc resource has to be deleted and created again, and Azure IoT Operations redeployed (steps 3 to 6.6). Start the VM for an hour at least once a month.
-- **The daily shutdown.** It stops the VM every day at the time in `VM_AUTO_SHUTDOWN_UTC`, also in the middle of a demo. `./infra/vm.sh status` shows it; `./infra/vm.sh shutdown 0800` or `./infra/vm.sh shutdown off` changes it.
+- **The daily shutdown.** It stops the VM every day at the time in `VM_AUTO_SHUTDOWN_UTC`, also in the middle of a demo. `bash infra/vm.sh status` shows it; `bash infra/vm.sh shutdown 0800` or `bash infra/vm.sh shutdown off` changes it.
 - **The simulator is offline for more than 10 minutes while the VM runs.** It restarts itself and reads the broker's certificate again. You do not have to do anything.
 - **A trial capacity** cannot be paused and costs nothing; what ends is the trial. Move the workspace to a paid capacity before that date.
 - Pausing a capacity bills the usage that Fabric had spread over the coming hours at once. `RawEvents` keeps 14 days of data by design; the typed tables keep a year or more.
@@ -712,8 +712,8 @@ Nothing has to be rebuilt after a stop. Follow this order.
 **[Workstation]** `infra/99-cleanup.sh` removes what this guide created, in Azure and in Fabric. Without an option it only reports and changes nothing. Start with that.
 
 ```bash
-./infra/99-cleanup.sh            # what exists and what would be removed
-./infra/99-cleanup.sh --all      # the demo's Fabric items, then everything in Azure
+bash infra/99-cleanup.sh            # what exists and what would be removed
+bash infra/99-cleanup.sh --all      # the demo's Fabric items, then everything in Azure
 ```
 
 | Option | What it removes |
@@ -740,15 +740,24 @@ Before you deploy again, in `config/demo.env`: keep `CUSTOM_LOCATIONS_OID`, whic
 
 **A deployment of the first delivery.** Its folder has no clean-up script. Copy `infra/99-cleanup.sh` from this version into the `infra` folder of the copy you deployed from, next to its `config/demo.env`, and start it with `bash infra/99-cleanup.sh`. It uses no other file of the repository.
 
-**By hand.** The same in single commands, with the VM running:
+**By hand.** The same in single commands, with the VM running. Run them one at a time, and go on only when the one before worked; the first line reads the names the others use:
 
 ```bash
-source config/demo.env
+source config/demo.env && echo "resource group: $RESOURCE_GROUP"
+```
+
+```bash
 az iot ops delete --name "$AIO_INSTANCE_NAME" --resource-group "$RESOURCE_GROUP" --include-deps
-VM_ID="$(az vm show --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --query identity.principalId --output tsv)"
+```
+
+```bash
+VM_ID="$(az vm show --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --query identity.principalId --output tsv)" &&
 for id in $(az role assignment list --all --fill-principal-name false --query "[?principalId=='$VM_ID'].id" --output tsv); do
   az role assignment delete --ids "$id"
 done
+```
+
+```bash
 az group delete --name "$RESOURCE_GROUP" --yes
 ```
 
@@ -762,23 +771,23 @@ All typed on the workstation, in the root folder of the repository.
 
 | To | Command |
 |---|---|
-| See the state of the VM, SSH and the daily shutdown | `./infra/vm.sh status` |
-| Start or stop the VM | `./infra/vm.sh start`, `./infra/vm.sh stop` |
-| Open a shell on the VM | `./infra/vm.sh ssh` |
-| Copy the repository and the settings to the VM | `./infra/vm.sh push` |
-| Copy only the settings to the VM | `./infra/vm.sh push-env` |
-| Simulator status | `./infra/vm.sh ssh bash ./edge/scripts/simctl.sh status` |
-| Hold the wind near 11 m/s for an hour | `./infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m` |
-| Inject the demo fault | `./infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh` |
-| End all faults, limits and the wind override | `./infra/vm.sh ssh bash ./edge/scripts/simctl.sh resolve all`, then `release all`, `start all`, `wind --clear` |
-| See messages on the broker | `./infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20` |
-| Simulator log | `./infra/vm.sh ssh kubectl logs deployment/windfarm-simulator -n windfarm --tail=30` |
-| Redeploy the simulator after a change | `./infra/vm.sh push`, then `./infra/vm.sh ssh bash ./edge/scripts/05-deploy-simulator.sh` |
-| Install your SSH key on the VM again | `./infra/vm.sh reset-key` |
-| Run a command on the VM without SSH | `./infra/vm.sh run bash ./edge/scripts/simctl.sh status` |
-| Rebuild `config/demo.env` on a workstation that lost it, from what is deployed | `./infra/rebuild-env.sh` |
-| See what a clean-up would remove | `./infra/99-cleanup.sh` |
-| Remove the demo from Fabric and Azure | `./infra/99-cleanup.sh --all` |
+| See the state of the VM, SSH and the daily shutdown | `bash infra/vm.sh status` |
+| Start or stop the VM | `bash infra/vm.sh start`, `bash infra/vm.sh stop` |
+| Open a shell on the VM | `bash infra/vm.sh ssh` |
+| Copy the repository and the settings to the VM | `bash infra/vm.sh push` |
+| Copy only the settings to the VM | `bash infra/vm.sh push-env` |
+| Simulator status | `bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh status` |
+| Hold the wind near 11 m/s for an hour | `bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m` |
+| Inject the demo fault | `bash infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh` |
+| End all faults, limits and the wind override | `bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh resolve all`, then `release all`, `start all`, `wind --clear` |
+| See messages on the broker | `bash infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20` |
+| Simulator log | `bash infra/vm.sh ssh kubectl logs deployment/windfarm-simulator -n windfarm --tail=30` |
+| Redeploy the simulator after a change | `bash infra/vm.sh push`, then `bash infra/vm.sh ssh bash ./edge/scripts/05-deploy-simulator.sh` |
+| Install your SSH key on the VM again | `bash infra/vm.sh reset-key` |
+| Run a command on the VM without SSH | `bash infra/vm.sh run bash ./edge/scripts/simctl.sh status` |
+| Rebuild `config/demo.env` on a workstation that lost it, from what is deployed | `bash infra/rebuild-env.sh` |
+| See what a clean-up would remove | `bash infra/99-cleanup.sh` |
+| Remove the demo from Fabric and Azure | `bash infra/99-cleanup.sh --all` |
 
 ## Sources
 

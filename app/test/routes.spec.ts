@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { DiagnosticStep, LiveState, TrendPoint } from '../overlay/packages/frontend/src/twin/data/contract';
 import { fromFunction } from '../overlay/packages/frontend/src/twin/data/functionResult';
-import { LAKEHOUSE_POLL_MS, POLL_MS, ageText, freshnessOf, pollDelay } from '../overlay/packages/frontend/src/twin/data/provider';
+import { LAKEHOUSE_POLL_MS, POLL_MS, STALE_AFTER_S, STOPPED_HINT, ageText, freshnessOf, pollDelay } from '../overlay/packages/frontend/src/twin/data/provider';
 import { RETRY_EVENTHOUSE_MS, type RouteCalls, chooseRoute } from '../overlay/packages/frontend/src/twin/data/routes';
 
 const state = (route: 'eventhouse' | 'lakehouse'): LiveState => ({ source: 'fabric', route, asOf: '2026-11-23T07:00:00Z', turbines: [], alarms: [], weather: null });
@@ -114,9 +114,18 @@ describe('a function that could not do its work', () => {
 describe('what the page says about the age of its values', () => {
   const seen = (route: 'eventhouse' | 'lakehouse' | 'sample', turbines = 1) => ({ source: route === 'sample' ? 'sample' : 'fabric', route, turbines: new Array<unknown>(turbines).fill(0) });
 
-  it('calls Eventhouse values live for a minute, then stale', () => {
+  it('calls Eventhouse values live for two minutes, then stale', () => {
     expect(freshnessOf(seen('eventhouse'), 5, false)).toBe('live');
-    expect(freshnessOf(seen('eventhouse'), 61, false)).toBe('stale');
+    // The one reading from a deployed app was 56 seconds: a working pipeline must not sit at the limit.
+    expect(freshnessOf(seen('eventhouse'), 56, false)).toBe('live');
+    expect(freshnessOf(seen('eventhouse'), 90, false)).toBe('live');
+    expect(STALE_AFTER_S).toBeGreaterThanOrEqual(2 * 56);
+    expect(freshnessOf(seen('eventhouse'), STALE_AFTER_S, false)).toBe('live');
+    expect(freshnessOf(seen('eventhouse'), STALE_AFTER_S + 1, false)).toBe('stale');
+  });
+  it('names the stopped edge VM and the commands in the hint of a stale badge', () => {
+    for (const part of ['edge VM', 'VM_AUTO_SHUTDOWN_UTC', 'bash infra/vm.sh status', 'bash infra/vm.sh start']) expect(STOPPED_HINT).toContain(part);
+    expect(STOPPED_HINT).not.toContain('./infra');
   });
   it('calls Lakehouse values delayed, never live, and stale only after twenty minutes', () => {
     expect(freshnessOf(seen('lakehouse'), 5, false)).toBe('delayed');

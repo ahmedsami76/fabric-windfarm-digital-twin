@@ -4,11 +4,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { type Access, FabricError, brief, clearLookup, lookup, lookupLakehouse } from '../overlay/packages/functions/src/fabric';
 import { KustoError, rowsOf } from '../overlay/packages/functions/src/kusto';
 import {
-  ALARMS_QUERY, SQL_ALARMS, SQL_PROBE, SQL_TURBINES, SQL_WEATHER, TELEMETRY_COLUMNS, TURBINES_QUERY, WEATHER_QUERY,
-  type SqlConnect, checkEventhouse, checkLakehouse, currentDatabase, liveFromEventhouse, liveFromLakehouse, resetRoute,
+  ALARMS_QUERY, DELAY_QUERY, SQL_ALARMS, SQL_PROBE, SQL_TURBINES, SQL_WEATHER, TELEMETRY_COLUMNS, TURBINES_QUERY, WEATHER_QUERY,
+  type SqlConnect, checkEventhouse, checkLakehouse, currentDatabase, currentSqlDatabase, delayText, liveFromEventhouse, liveFromLakehouse, resetRoute,
   sqlTrendQuery, toTurbine, trendFromEventhouse, trendFromLakehouse, trendQuery,
 } from '../overlay/packages/functions/src/live';
-import { NoPrincipal, type Principal, PrincipalRefused, clearPrincipalToken, principalToken, readPrincipal } from '../overlay/packages/functions/src/principal';
+import { NoPrincipal, type Principal, PrincipalRefused, SecretsUnreadable, clearPrincipalToken, principalToken, readPrincipal } from '../overlay/packages/functions/src/principal';
 import { plainRows } from '../overlay/packages/functions/src/sql';
 
 const here = new URL('.', import.meta.url).pathname;
@@ -76,6 +76,7 @@ function fabric(fake: Fake = {}): { access: Access; calls: string[] } {
       }
       if (body.csl.startsWith('WeatherObservations')) return json(table(['Timestamp', 'WindSpeed', 'WindDirection', 'WindGust', 'AmbientTemp', 'AirDensity'], [[null, null, null, null, null, null]]));
       if (body.csl.includes('summarize ActivePower = avg(ActivePower)')) return json(table(['Timestamp', 'ActivePower', 'WindSpeed', 'RotorSpeed', 'GearboxOilTemp', 'GearboxBearingTemp', 'GearboxVibration'], [['2026-11-21T17:00:00Z', 1000, 7, 9, 50, 55, 2]]));
+      if (body.csl === DELAY_QUERY) return json(table(['Rows', 'Median', 'P95', 'Highest'], [[2160, 23, 31.4, 44]]));
       return json(table(['Rows', 'Turbines', 'Newest'], [[24, 12, '2026-11-21T18:00:10Z']]));
     }
     return new Response('not found', { status: 404 });
@@ -140,7 +141,7 @@ describe('looking the items up', () => {
   });
 
   it('finds the Lakehouse, the server of its SQL endpoint and its identifier', async () => {
-    expect(await lookupLakehouse(fabric().access)).toEqual({ workspaceId: WORKSPACE, lakehouseId: 'lh-id', lakehouseName: 'WindFarmLH', sqlServer: SQL_SERVER });
+    expect(await lookupLakehouse(fabric().access)).toEqual({ workspaceId: WORKSPACE, lakehouseId: 'lh-id', lakehouseName: 'WindFarmLH', sqlEndpointId: 'endpoint-id', sqlServer: SQL_SERVER });
   });
 
   it('says so when there is no Lakehouse of that name, or its SQL endpoint is not ready', async () => {
@@ -175,6 +176,14 @@ describe('the service principal', () => {
       return name === 'KUSTO_TENANT_ID' ? TENANT : CLIENT;
     };
     expect(() => readPrincipal(throwing)).toThrow(/no secret KUSTO_CLIENT_SECRET/);
+  });
+
+  it('is a failure, not "not set up", when the host cannot read the secrets at all', () => {
+    const broken = (): string => {
+      throw new Error('Secrets could not be retrieved for this invocation. Retry the request.');
+    };
+    expect(() => readPrincipal(broken)).toThrow(SecretsUnreadable);
+    expect(() => readPrincipal(broken)).toThrow(/could not be read \(KUSTO_TENANT_ID\): Secrets could not be retrieved/);
   });
 
   it('refuses a tenant or an application ID that is not one', () => {
@@ -271,15 +280,55 @@ describe('the live values from the Eventhouse', () => {
 });
 
 describe('the live values from the Lakehouse', () => {
-  it('opens the SQL endpoint of the Lakehouse with the SQL token and the item identifier as database', async () => {
+  it('opens the SQL endpoint of the Lakehouse with the SQL token and the name of the Lakehouse as database', async () => {
     const sql = lakehouse(copies);
     const state = await liveFromLakehouse(fabric().access, () => 'sql-token', sql.connect);
-    expect(sql.opened).toEqual([`${SQL_SERVER} lh-id sql-token`]);
+    expect(sql.opened).toEqual([`${SQL_SERVER} WindFarmLH sql-token`]);
     expect(sql.asked).toEqual([SQL_TURBINES, SQL_ALARMS, SQL_WEATHER]);
     expect(state).toMatchObject({ source: 'fabric', route: 'lakehouse', asOf: '2026-11-21T17:54:10.000Z' });
     expect(state.turbines.map((t) => `${t.id} ${t.state} ${t.activePower}`)).toEqual(['WT-01 RUNNING 1500', 'WT-02 DERATED 900']);
     expect(state.alarms[0]).toMatchObject({ id: 'a2', code: 'GBX-VIB-CRIT', severity: 'critical', raisedAt: '2026-11-21T17:50:00.000Z', value: 8.2 });
     expect(state.weather).toMatchObject({ windSpeed: 8.4, windGust: 11 });
+  });
+
+  it('tries the two identifiers when the endpoint does not open the name, and remembers which one worked', async () => {
+    // The words the first deployment got, then for the item identifier of the Lakehouse.
+    const notFound = "The SQL endpoint of the Lakehouse answered ELOGIN: Login failed for user '<token-identified principal>'.Reason: Authentication was successful, but the database was not found or you have insufficient permissions to connect to it.";
+    for (const [knows, tries] of [['lh-id', 2], ['endpoint-id', 3]] as const) {
+      resetRoute();
+      const opened: string[] = [];
+      const connect: SqlConnect = (_server, database) => async (statements) => {
+        opened.push(database);
+        if (database !== knows) throw new Error(notFound);
+        return statements.map(copies);
+      };
+      const state = await liveFromLakehouse(fabric().access, () => 'sql-token', connect);
+      expect(state.turbines).toHaveLength(2);
+      expect(opened).toEqual(['WindFarmLH', 'lh-id', 'endpoint-id'].slice(0, tries));
+      expect(currentSqlDatabase()).toBe(knows);
+      opened.length = 0;
+      clearLookup();
+      await liveFromLakehouse(fabric().access, () => 'sql-token', connect);
+      expect(opened).toEqual([knows]); // no second search
+    }
+  });
+
+  it('says what the endpoint answered to each name when it opens none', async () => {
+    const connect: SqlConnect = () => async () => {
+      throw new Error('The SQL endpoint of the Lakehouse answered ELOGIN: Login failed. Reason: the database was not found or you have insufficient permissions to connect to it.');
+    };
+    const failure = await liveFromLakehouse(fabric().access, () => 'sql-token', connect).catch((e: unknown) => e as Error);
+    expect((failure as Error).message).toMatch(/under none of 3 names\. as the name of the Lakehouse: .* \| as the item identifier of the Lakehouse: .* \| as the item identifier of the SQL endpoint: /);
+  });
+
+  it('does not try another name when the endpoint opened the database and refused the statement', async () => {
+    let attempts = 0;
+    const connect: SqlConnect = () => async () => {
+      attempts += 1;
+      throw new Error("The SQL endpoint of the Lakehouse answered EREQUEST: Invalid object name 'TurbineTelemetry'.");
+    };
+    await expect(liveFromLakehouse(fabric().access, () => 'sql-token', connect)).rejects.toThrow(/Invalid object name/);
+    expect(attempts).toBe(1);
   });
 
   it('gives an empty picture, not an error, when the copies hold nothing recent', async () => {
@@ -340,42 +389,63 @@ describe('the connection check', () => {
   it('passes every line of the Eventhouse route when the service principal works', async () => {
     const steps = await checkEventhouse(fabric().access, principal, Date.parse('2026-11-21T18:00:20Z'));
     expect(lines(steps)).toEqual([
+      'PASS Functions of the Eventhouse route',
       'PASS Token for the Fabric API', 'PASS Workspace and KQL database', 'PASS Data agent, for the chat',
       'PASS Eventhouse route: service principal', 'PASS Eventhouse route: token from Microsoft Entra ID', 'PASS Eventhouse route: query',
+      'PASS Eventhouse route: delay from turbine to database',
     ]);
-    expect(steps[3].detail).toBe(`application ${CLIENT} in tenant ${TENANT}`);
-    expect(steps[5].detail).toMatch(/24 rows from 12 turbines in the last 2 minutes; newest 10 s old/);
+    expect(steps[0].detail).toMatch(/^build [0-9a-f]{12}$/);
+    expect(steps[4].detail).toBe(`application ${CLIENT} in tenant ${TENANT}`);
+    expect(steps[6].detail).toMatch(/24 rows from 12 turbines in the last 2 minutes; newest 10 s old/);
+    expect(steps[7].detail).toBe('median 23 s, 95 % of the rows within 31 s, highest 44 s, over the 2160 rows of the last 15 minutes');
     expect(JSON.stringify(steps)).not.toContain(SECRET);
+  });
+
+  it('measures the delay only when there is telemetry, and a measurement that fails is no failure of the route', async () => {
+    const silent = await checkEventhouse(fabric({ kusto: (_t, _d, csl) => (csl === DELAY_QUERY ? undefined : json(table(['Rows', 'Turbines', 'Newest'], [[0, 0, null]]))) }).access, principal);
+    expect(lines(silent).slice(-1)).toEqual(['FAIL Eventhouse route: query']);
+    expect(silent.at(-1)!.detail).toMatch(/no telemetry in the last 2 minutes.*edge VM is stopped \(the VM has a daily shutdown\)/);
+    clearLookup();
+    const refused = await checkEventhouse(fabric({ kusto: (_t, _d, csl) => (csl === DELAY_QUERY ? new Response('{"error":{"message":"Semantic error: IngestedAt"}}', { status: 400 }) : undefined) }).access, principal);
+    expect(lines(refused).slice(-2)).toEqual(['PASS Eventhouse route: query', 'SKIP Eventhouse route: delay from turbine to database']);
+    expect(refused.at(-1)!.detail).toMatch(/^not measured: /);
+    expect(delayText({})).toBe('median ? s, 95 % of the rows within ? s, highest ? s, over the ? rows of the last 15 minutes');
   });
 
   it('skips the Eventhouse route when no service principal is set up, and still checks the rest', async () => {
     const steps = await checkEventhouse(fabric({ agent: false }).access, noPrincipal);
-    expect(lines(steps)).toEqual(['PASS Token for the Fabric API', 'PASS Workspace and KQL database', 'FAIL Data agent, for the chat', 'SKIP Eventhouse route: service principal']);
-    expect(steps[3].detail).toMatch(/No service principal is set up/);
+    expect(lines(steps).slice(1)).toEqual(['PASS Token for the Fabric API', 'PASS Workspace and KQL database', 'FAIL Data agent, for the chat', 'SKIP Eventhouse route: service principal']);
+    expect(steps[4].detail).toMatch(/No service principal is set up/);
+    clearLookup();
+    const unreadable = await checkEventhouse(fabric().access, () => readPrincipal(() => {
+      throw new Error('Secrets could not be retrieved for this invocation.');
+    }));
+    expect(lines(unreadable).slice(4)).toEqual(['FAIL Eventhouse route: service principal']);
+    expect(unreadable[4].detail).toMatch(/could not be read.*Secrets could not be retrieved/);
   });
 
   it('shows where the Eventhouse route stops: at Entra, or at the Eventhouse', async () => {
     const atEntra = await checkEventhouse(fabric({ entra: () => json({ error: 'invalid_client', error_description: 'AADSTS7000215: Invalid client secret provided.' }, 401) }).access, principal);
-    expect(lines(atEntra).slice(3)).toEqual(['PASS Eventhouse route: service principal', 'FAIL Eventhouse route: token from Microsoft Entra ID']);
-    expect(atEntra[4].detail).toMatch(/AADSTS7000215/);
+    expect(lines(atEntra).slice(4)).toEqual(['PASS Eventhouse route: service principal', 'FAIL Eventhouse route: token from Microsoft Entra ID']);
+    expect(atEntra[5].detail).toMatch(/AADSTS7000215/);
     clearLookup();
     const atEventhouse = await checkEventhouse(fabric({ kusto: () => json({ error: { message: 'Principal is not authorized to read database' } }, 403) }).access, principal);
-    expect(lines(atEventhouse).slice(4)).toEqual(['PASS Eventhouse route: token from Microsoft Entra ID', 'FAIL Eventhouse route: query']);
-    expect(atEventhouse[5].detail).toMatch(/403.*not authorized/);
+    expect(lines(atEventhouse).slice(5)).toEqual(['PASS Eventhouse route: token from Microsoft Entra ID', 'FAIL Eventhouse route: query']);
+    expect(atEventhouse[6].detail).toMatch(/403.*not authorized/);
   });
 
   it('fails the query line when the query runs and finds no telemetry', async () => {
     const steps = await checkEventhouse(fabric({ kusto: (_t, _d, csl) => (csl.includes('summarize Rows') ? json(table(['Rows', 'Turbines', 'Newest'], [[0, 0, null]])) : undefined) }).access, principal);
-    expect(steps[5]).toMatchObject({ ok: false });
-    expect(steps[5].detail).toMatch(/found no telemetry in the last 2 minutes/);
+    expect(steps[6]).toMatchObject({ ok: false });
+    expect(steps[6].detail).toMatch(/found no telemetry in the last 2 minutes/);
   });
 
   it('checks the Lakehouse route: token, endpoint, a query with the age of the newest row', async () => {
     const sql = lakehouse(copies);
     const steps = await checkLakehouse(fabric().access, () => 'sql-token', sql.connect, Date.parse('2026-11-21T18:00:10Z'));
-    expect(lines(steps)).toEqual(['PASS Lakehouse route: token for SQL', 'PASS Lakehouse route: Lakehouse and SQL endpoint', 'PASS Lakehouse route: query']);
-    expect(steps[1].detail).toBe(`WindFarmLH at ${SQL_SERVER}`);
-    expect(steps[2].detail).toBe('8000 rows from 12 turbines in the last 60 minutes; newest 6 min old');
+    expect(lines(steps)).toEqual(['PASS Functions of the Lakehouse route', 'PASS Lakehouse route: token for SQL', 'PASS Lakehouse route: Lakehouse and SQL endpoint', 'PASS Lakehouse route: query']);
+    expect(steps[2].detail).toBe(`WindFarmLH at ${SQL_SERVER}`);
+    expect(steps[3].detail).toBe('8000 rows from 12 turbines in the last 60 minutes; newest 6 min old; database opened as the name of the Lakehouse');
     expect(sql.asked).toEqual([SQL_PROBE]);
   });
 
@@ -383,13 +453,13 @@ describe('the connection check', () => {
     const none = (): string => {
       throw new Error('Token for audience Sql was not supplied');
     };
-    expect(lines(await checkLakehouse(fabric().access, none, lakehouse().connect))).toEqual(['FAIL Lakehouse route: token for SQL', 'PASS Lakehouse route: Lakehouse and SQL endpoint']);
+    expect(lines(await checkLakehouse(fabric().access, none, lakehouse().connect)).slice(1)).toEqual(['FAIL Lakehouse route: token for SQL', 'PASS Lakehouse route: Lakehouse and SQL endpoint']);
     const refusing: SqlConnect = () => async () => {
       throw new Error('The SQL endpoint of the Lakehouse answered ELOGIN: Login failed for user');
     };
     const steps = await checkLakehouse(fabric().access, () => 'sql-token', refusing);
-    expect(lines(steps)).toEqual(['PASS Lakehouse route: token for SQL', 'PASS Lakehouse route: Lakehouse and SQL endpoint', 'FAIL Lakehouse route: query']);
-    expect(steps[2].detail).toMatch(/ELOGIN: Login failed/);
+    expect(lines(steps).slice(1)).toEqual(['PASS Lakehouse route: token for SQL', 'PASS Lakehouse route: Lakehouse and SQL endpoint', 'FAIL Lakehouse route: query']);
+    expect(steps[3].detail).toMatch(/under none of 3 names.*as the name of the Lakehouse.*ELOGIN: Login failed.*as the item identifier of the SQL endpoint/);
   });
 
   it('never repeats a token or a secret in a message', () => {
@@ -398,10 +468,19 @@ describe('the connection check', () => {
   });
 });
 
+describe('the build stamp', () => {
+  it('is the same for the page and the functions of one build, so that a difference in the check means an older part is answering', async () => {
+    const { PAGE_BUILD } = await import('../overlay/packages/frontend/src/twin/data/build');
+    const { FUNCTIONS_BUILD } = await import('../overlay/packages/functions/src/build');
+    expect(PAGE_BUILD).toMatch(/^[0-9a-f]{12}$/);
+    expect(FUNCTIONS_BUILD).toBe(PAGE_BUILD);
+  });
+});
+
 describe('the queries', () => {
   it('are the ones in the repository, where they can be run by hand', () => {
     const kql = readFileSync(`${here}../../fabric/kql/94-twin-app-queries.kql`, 'utf8').replace(/\r/g, '');
-    for (const query of [TURBINES_QUERY, ALARMS_QUERY, WEATHER_QUERY, trendQuery('WT-07', 60)]) expect(kql).toContain(query);
+    for (const query of [TURBINES_QUERY, ALARMS_QUERY, WEATHER_QUERY, trendQuery('WT-07', 60), DELAY_QUERY]) expect(kql).toContain(query);
     const sql = readFileSync(`${here}../../fabric/sql/94-twin-app-queries.sql`, 'utf8').replace(/\r/g, '');
     for (const query of [SQL_TURBINES, SQL_ALARMS, SQL_WEATHER, sqlTrendQuery('WT-07', 60), SQL_PROBE]) expect(sql).toContain(query);
   });

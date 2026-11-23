@@ -106,7 +106,7 @@ if [[ -n "${VM_AUTO_SHUTDOWN_UTC:-}" ]]; then
   SHUTDOWN_NOTE="every day at ${VM_AUTO_SHUTDOWN_UTC:0:2}:${VM_AUTO_SHUTDOWN_UTC:2:2} UTC"
   SHUTDOWN_ELSEWHERE="$(utc_time_elsewhere "$VM_AUTO_SHUTDOWN_UTC")"
 else
-  SHUTDOWN_NOTE="not scheduled; stop the VM yourself with ./infra/vm.sh stop"
+  SHUTDOWN_NOTE="not scheduled; stop the VM yourself with bash infra/vm.sh stop"
   SHUTDOWN_ELSEWHERE=""
 fi
 
@@ -155,14 +155,14 @@ fi
 log "Done"
 info "VM public IP:              $PUBLIC_IP"
 info "VM administrator:          $VM_ADMIN   (the user name for SSH; not your own name)"
-info "Copy the repository:       ./infra/vm.sh push"
-info "Connect:                   ./infra/vm.sh ssh"
+info "Copy the repository:       bash infra/vm.sh push"
+info "Connect:                   bash infra/vm.sh ssh"
 info "VM managed identity name:  $VM_NAME   (object ID $PRINCIPAL_ID)"
 info "VM shuts down:             $SHUTDOWN_NOTE"
 if [[ -n "$SHUTDOWN_ELSEWHERE" ]]; then
   info "                           that is $SHUTDOWN_ELSEWHERE"
 fi
-info "                           start it again with ./infra/vm.sh start; change the time with ./infra/vm.sh shutdown HHMM"
+info "                           start it again with bash infra/vm.sh start; change the time with bash infra/vm.sh shutdown HHMM"
 if [[ -n "$OID" && -n "${OID_IS_NEW:-}" ]]; then
   info "Custom Locations OID:      $OID"
   info "Put this line in config/demo.env:  CUSTOM_LOCATIONS_OID=\"$OID\""
@@ -175,4 +175,4 @@ else
 fi
 rm -f "$OID_ERROR_FILE"
 info "SSH is open to the address you are on now. Some subscriptions replace that rule with"
-info "just-in-time access a few hours later; ./infra/vm.sh ssh and ./infra/vm.sh push deal with that."
+info "just-in-time access a few hours later; bash infra/vm.sh ssh and bash infra/vm.sh push deal with that."

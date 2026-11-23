@@ -10,6 +10,7 @@
  * The queries are also in the repository, where they can be run by hand:
  * `fabric/kql/94-twin-app-queries.kql` and `fabric/sql/94-twin-app-queries.sql`.
  */
+import { FUNCTIONS_BUILD } from './build.js';
 import { LAKEHOUSE_WINDOW_MINUTES, LIVE_WINDOW } from './config.js';
 import type { Alarm, DiagnosticStep, LiveState, TrendPoint, TurbineLive, TurbineState, Weather } from './contract.js';
 import { type Access, type LakehouseLookup, type Lookup, brief, clearLookup, lookup, lookupLakehouse } from './fabric.js';
@@ -284,15 +285,15 @@ export type SqlConnect = (server: string, database: string, token: string) => Sq
 
 /**
  * The names the SQL endpoint may know the Lakehouse by, in the order they are tried. Rayfin's guide
- * says the item identifier of the Lakehouse; the first deployment got "the database was not found or
- * you have insufficient permissions" for it (23 November 2026). The endpoint is an item of its own
- * with its own identifier, and SQL tools connect with the display name. So all three are tried, and
- * the one that answers is remembered while the host lives.
+ * says the item identifier of the Lakehouse; on the first deployment (23 November 2026) the endpoint
+ * answered "the database was not found or you have insufficient permissions" to it and opened the
+ * database under the display name. So the name comes first; the two identifiers stay as fallbacks,
+ * and the one that answers is remembered while the host lives.
  */
 export function sqlDatabaseNames(found: LakehouseLookup): { name: string; kind: string }[] {
   const names = [
-    { name: found.lakehouseId, kind: 'the item identifier of the Lakehouse' },
     { name: found.lakehouseName, kind: 'the name of the Lakehouse' },
+    { name: found.lakehouseId, kind: 'the item identifier of the Lakehouse' },
     ...(found.sqlEndpointId ? [{ name: found.sqlEndpointId, kind: 'the item identifier of the SQL endpoint' }] : []),
   ];
   return names.filter((n, i) => names.findIndex((m) => m.name === n.name) === i);
@@ -339,6 +340,24 @@ const step = (steps: DiagnosticStep[], name: string, ok: boolean, detail: string
   steps.push({ step: name, ok, detail: brief(detail) });
 };
 
+/**
+ * How long a reading takes from the turbine to the KQL database, measured in the data itself: the time
+ * the row arrived (`IngestedAt`, which the update policy takes from `ingestion_time()`) minus the time
+ * the turbine put on it. No clock of a workstation or of the function host is in it. The connection
+ * check prints the result, because the limit after which the page calls its values stale
+ * (`STALE_AFTER_S`) has to sit well above the highest delay.
+ */
+export const DELAY_QUERY = `TurbineTelemetry
+| where Timestamp > ago(15m)
+| extend DelayS = datetime_diff('second', IngestedAt, Timestamp)
+| summarize Rows = count(), Median = percentile(DelayS, 50), P95 = percentile(DelayS, 95), Highest = max(DelayS)`;
+
+/** The words of the connection check for the answer to `DELAY_QUERY`. */
+export function delayText(row: Record<string, unknown>): string {
+  const n = (value: unknown): string => (typeof value === 'number' && Number.isFinite(value) ? String(Math.round(value)) : '?');
+  return `median ${n(row.Median)} s, 95 % of the rows within ${n(row.P95)} s, highest ${n(row.Highest)} s, over the ${n(row.Rows)} rows of the last 15 minutes`;
+}
+
 const minutesOld = (iso: string, now: number): string => {
   const ms = now - new Date(iso).getTime();
   if (!iso || !Number.isFinite(ms)) return 'age unknown';
@@ -351,6 +370,7 @@ const minutesOld = (iso: string, now: number): string => {
  */
 export async function checkEventhouse(access: Access, principal: () => Principal, now: number = Date.now()): Promise<DiagnosticStep[]> {
   const steps: DiagnosticStep[] = [];
+  step(steps, 'Functions of the Eventhouse route', true, `build ${FUNCTIONS_BUILD}`);
 
   let fabricOk = false;
   try {
@@ -404,7 +424,16 @@ export async function checkEventhouse(access: Access, principal: () => Principal
       const newest = text(r.Newest);
       step(steps, 'Eventhouse route: query', num(r.Rows) > 0, num(r.Rows) > 0
         ? `${num(r.Rows)} rows from ${num(r.Turbines)} turbines in the last 2 minutes; newest ${minutesOld(newest, now)}`
-        : 'the query ran and found no telemetry in the last 2 minutes: the simulator or the edge VM is stopped');
+        : 'the query ran and found no telemetry in the last 2 minutes: the simulator or the edge VM is stopped (the VM has a daily shutdown)');
+      if (num(r.Rows) > 0) {
+        // A measurement, not a condition: when it cannot be taken, the route still works.
+        try {
+          const delay = await queryEventhouse(access, found, token, DELAY_QUERY);
+          step(steps, 'Eventhouse route: delay from turbine to database', true, delayText(delay[0] ?? {}));
+        } catch (error) {
+          steps.push({ step: 'Eventhouse route: delay from turbine to database', ok: false, skipped: true, detail: `not measured: ${brief(error)}` });
+        }
+      }
     } catch (error) {
       step(steps, 'Eventhouse route: query', false, brief(error));
     }
@@ -415,6 +444,7 @@ export async function checkEventhouse(access: Access, principal: () => Principal
 /** Tries what the Lakehouse route needs, in the same manner. */
 export async function checkLakehouse(access: Access, sqlToken: () => string, connect: SqlConnect, now: number = Date.now()): Promise<DiagnosticStep[]> {
   const steps: DiagnosticStep[] = [];
+  step(steps, 'Functions of the Lakehouse route', true, `build ${FUNCTIONS_BUILD}`);
   let token: string | undefined;
   try {
     token = sqlToken();

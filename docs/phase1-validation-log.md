@@ -119,6 +119,12 @@ Clean-up: `infra/99-cleanup.sh` was added on 20 November 2026 on request and run
 
 Second deployment, open: what removed the SSH rule and whether a just-in-time policy existed that `vm.sh` did not see (obstacle 18); why Azure Resource Health reports a young cluster as unavailable (obstacle 16); which Spark runtime ran the notebooks; whether the KQL added since the first run (`ActiveAlarms()`, `92-question-bank-live.kql`) was run.
 
+Added on 23 November 2026, at the close-out of Phase 4, for three entries of this log:
+
+- **Obstacle 12, scripts without the execute permission.** It came back twice (obstacle 7 of Phase 3, obstacle A of Phase 4). The `chmod` step this log introduced did not prevent that. Since the close-out of Phase 4 every command of every guide and every hint of a script starts a script through `bash`, and `bash tools/check-scripts.sh` fails on the direct form. The `chmod` steps are gone.
+- **Obstacle 19, `infra/rebuild-env.sh`.** On 23 November the user asked for the command again after a restart of the environment; `bash infra/vm.sh` worked afterwards, so a settings file existed. Whether the script wrote it, and what it printed, was not reported. Its run against Azure still counts as not seen.
+- **Question 4, the daily shutdown.** Answered by Phase 4: the VM of the current deployment stops at 08:00 UTC (`VM_AUTO_SHUTDOWN_UTC="0800"`), and did so in the middle of the Phase 4 deployment (its obstacle K).
+
 Design question for Phase 2: whether readers without access to the Eventhouse must read through the Lakehouse shortcuts, which would need delegated instead of passthrough identity (obstacle 10).
 
 ## Lessons

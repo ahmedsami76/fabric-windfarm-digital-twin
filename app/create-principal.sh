@@ -82,7 +82,10 @@ if [[ "$MODE" == "--show" ]]; then
   if [[ -z "$APP_ID" ]]; then echo "No app registration named $NAME. The twin reads the Lakehouse."; exit 0; fi
   OBJECT_ID="$(object_id "$APP_ID" || true)"
   echo "App registration $NAME: application ID $APP_ID, service principal ${OBJECT_ID:-missing}."
-  if [[ -n "$OBJECT_ID" ]]; then echo "Role on the workspace: $(workspace_role "$WORKSPACE_ID" "$OBJECT_ID" || true)"; fi
+  if [[ -n "$OBJECT_ID" ]]; then
+    ROLE="$(workspace_role "$WORKSPACE_ID" "$OBJECT_ID" || true)"
+    echo "Role on the workspace: ${ROLE:-none. Run this script without an option: it gives the role and the secrets}"
+  fi
   if [[ -f "$APP/rayfin/rayfin.yml" ]]; then
     echo "Secrets of the Fabric app:"
     (cd "$APP" && npx rayfin secret list) || echo "  could not be listed: sign in with npx rayfin login"
@@ -134,9 +137,21 @@ ROLE="$(workspace_role "$WORKSPACE_ID" "$OBJECT_ID" || true)"
 if [[ -n "$ROLE" ]]; then
   echo "It already has the role $ROLE."
 else
-  az rest --resource "$FABRIC" --method post --url "$FABRIC/v1/workspaces/$WORKSPACE_ID/roleAssignments" \
-    --body "{\"principal\": {\"id\": \"$OBJECT_ID\", \"type\": \"ServicePrincipal\"}, \"role\": \"Viewer\"}" --output none 2>"$ERR" \
-    || stop "The role was not given: $(tr '\n' ' ' < "$ERR") You need the Admin or Member role on the workspace. In the portal: the workspace, Manage access, Add people or groups, $NAME, Viewer."
+  # A principal created a moment ago is not known to Fabric at once: the first real run stopped here
+  # (23 November 2026). So "not found" is tried again for up to two minutes; any other answer stops.
+  ROLE_TRIES="${ROLE_TRIES:-8}"; ROLE_WAIT_SECONDS="${ROLE_WAIT_SECONDS:-15}"
+  for (( try = 1; ; try++ )); do
+    if az rest --resource "$FABRIC" --method post --url "$FABRIC/v1/workspaces/$WORKSPACE_ID/roleAssignments" \
+      --body "{\"principal\": {\"id\": \"$OBJECT_ID\", \"type\": \"ServicePrincipal\"}, \"role\": \"Viewer\"}" --output none 2>"$ERR"; then
+      break
+    fi
+    if (( try < ROLE_TRIES )) && grep -q -i -E 'not ?found|does not exist|unknown principal|invalid principal' "$ERR"; then
+      echo "Fabric does not know the new principal yet (try $try of $ROLE_TRIES). Waiting $ROLE_WAIT_SECONDS seconds."
+      sleep "$ROLE_WAIT_SECONDS"
+      continue
+    fi
+    stop "The role was not given: $(tr '\n' ' ' < "$ERR") You need the Admin or Member role on the workspace. If Fabric says it cannot find the principal, wait a few minutes and run this script again. Or in the portal: the workspace, Manage access, Add people or groups, $NAME, Viewer."
+  done
   echo "Done."
 fi
 

@@ -58,7 +58,7 @@ on_edge_vm() {
 # require_edge_vm: for the scripts of edge/scripts. Stops when run anywhere else.
 require_edge_vm() {
   [[ -n "${ALLOW_ANY_HOST:-}" ]] && return 0
-  on_edge_vm || die "This script runs on the edge VM (${VM_NAME:-VM_NAME is empty}), and this machine is '$(hostname 2>/dev/null || true)'. Connect to the VM first with ./infra/vm.sh ssh, or run it from here with: ./infra/vm.sh ssh bash ./edge/scripts/$(basename "$0")"
+  on_edge_vm || die "This script runs on the edge VM (${VM_NAME:-VM_NAME is empty}), and this machine is '$(hostname 2>/dev/null || true)'. Connect to the VM first with bash infra/vm.sh ssh, or run it from here with: bash infra/vm.sh ssh bash ./edge/scripts/$(basename "$0")"
 }
 
 # require_user_login: for the scripts of infra. Stops when run on the edge VM, or when

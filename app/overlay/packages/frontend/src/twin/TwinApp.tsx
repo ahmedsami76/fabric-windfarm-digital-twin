@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TwinView } from './TwinView';
 import type { PartKey } from './data/components';
 import type { LiveState } from './data/contract';
-import { type Freshness, type TwinDataProvider, ageText, freshnessOf, pollDelay } from './data/provider';
+import { type Freshness, STOPPED_HINT, type TwinDataProvider, ageText, freshnessOf, pollDelay } from './data/provider';
 import { SITE } from './data/site';
 import type { SceneEngine } from './scene/SceneEngine';
 import './twin.css';
@@ -89,7 +89,9 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
   const badgeTitle =
     freshness === 'delayed'
       ? 'These values come from the copies of the tables in the Lakehouse, which are written every few minutes. Open the connection check to see why the Eventhouse is not used.'
-      : 'Open the connection check';
+      : freshness === 'stale' || freshness === 'silent'
+        ? `${STOPPED_HINT} Select the badge for the connection check.`
+        : 'Open the connection check';
 
   const select = useCallback((id: string | null) => {
     setSelected(id);

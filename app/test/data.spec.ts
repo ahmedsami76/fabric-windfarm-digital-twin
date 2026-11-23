@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import type { LiveState } from '../overlay/packages/frontend/src/twin/data/contract';
 import { sampleRequested } from '../overlay/packages/frontend/src/twin/data/provider';
 import { SAMPLE_ALARMS, createSampleProvider } from '../overlay/packages/frontend/src/twin/data/sampleProvider';
-import { ALARM_OIL_TEMP, ALARM_VIBRATION, EARLY_OIL_TEMP, SITE, gearboxLevel, groundAt, powerCurve } from '../overlay/packages/frontend/src/twin/data/site';
+import { ALARM_OIL_TEMP, ALARM_VIBRATION, EARLY_OIL_TEMP, SITE, gearboxWatch, groundAt, powerCurve } from '../overlay/packages/frontend/src/twin/data/site';
+import { gearboxCondition } from '../overlay/packages/frontend/src/twin/data/components';
 import { VERTICAL_SCALE, elevationAt, heightAt } from '../overlay/packages/frontend/src/twin/scene/terrain';
 import { downwind, yawFor } from '../overlay/packages/frontend/src/twin/scene/turbine';
 
@@ -47,12 +48,14 @@ describe('the site data', () => {
     expect(powerCurve(8)).toBeGreaterThan(powerCurve(7));
   });
 
-  it('grades the gearbox by the early warning of the operations agent and the first alarms of the controller', () => {
-    expect(gearboxLevel(2.0, 60)).toBe(0);
-    expect(gearboxLevel(4.0, 60)).toBe(1);
-    expect(gearboxLevel(2.0, 72)).toBe(1);
-    expect(gearboxLevel(5.5, 60)).toBe(2);
-    expect(gearboxLevel(2.0, 78)).toBe(2);
+  it('marks the gearbox from the early warning of the operations agent on, and never calls a reading an alarm', () => {
+    expect(gearboxWatch(2.0, 60)).toBe(0);
+    expect(gearboxWatch(4.0, 60)).toBe(1);
+    expect(gearboxWatch(2.0, 72)).toBe(1);
+    // At and above the controller's limits the readings still say "watch": the controller decides on the alarm.
+    expect(gearboxWatch(ALARM_VIBRATION, 60)).toBe(1);
+    expect(gearboxWatch(5.94, 60)).toBe(1); // the highest single reading of a fault of severity 0.2 in the simulator
+    expect(gearboxWatch(2.0, ALARM_OIL_TEMP)).toBe(1);
   });
 });
 
@@ -171,7 +174,7 @@ describe('the sample data', () => {
 
     const early = await at(30);
     expect(turbine(early).state).toBe('RUNNING');
-    expect(gearboxLevel(turbine(early).gearboxVibration, turbine(early).gearboxOilTemp)).toBe(1);
+    expect(gearboxCondition(turbine(early), early.alarms)).toBe(1);
     expect(early.alarms).toEqual([]);
 
     const warned = await at(50);
@@ -179,6 +182,8 @@ describe('the sample data', () => {
     expect(turbine(warned).gearboxVibration).toBeGreaterThan(ALARM_VIBRATION);
     expect(codes(warned)).toEqual(['GBX-VIB-HIGH']);
     expect(warned.alarms[0].severity).toBe('warning');
+    expect(gearboxCondition(turbine(warned), warned.alarms)).toBe(2); // red while it runs: the controller has an alarm
+    expect(gearboxCondition(turbine(warned), [])).toBe(1); // the same readings without the alarm are amber
 
     const derated = await at(120);
     expect(turbine(derated).state).toBe('DERATED');
@@ -201,7 +206,7 @@ describe('the sample data', () => {
     expect(turbine(tripped).gearboxOilTemp).toBeGreaterThan(88);
     expect(turbine(tripped).generatorWindingTemp).toBeGreaterThan(turbine(tripped).ambientTemp + 20); // still warm
     expect(codes(tripped)).toEqual(['GBX-OIL-TEMP-CRIT', 'GBX-OIL-TEMP-HIGH', 'GBX-OIL-TEMP-TRIP']);
-    expect(gearboxLevel(turbine(tripped).gearboxVibration, turbine(tripped).gearboxOilTemp)).toBe(2); // red by the oil alone
+    expect(gearboxCondition(turbine(tripped), tripped.alarms)).toBe(2); // red by the oil alarms alone
 
     const restarted = await at(225);
     expect(turbine(restarted).state).toBe('RUNNING');

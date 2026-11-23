@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Edge VM helper (run on your workstation or in Azure Cloud Shell, signed in as yourself).
 #
-#   infra/vm.sh status              power state, address, SSH access, daily shutdown
-#   infra/vm.sh start               start the VM and wait until it answers
-#   infra/vm.sh stop                stop and deallocate the VM (ends the compute cost)
-#   infra/vm.sh ssh                 open a shell on the VM (opens SSH access first if it is closed)
-#   infra/vm.sh ssh COMMAND         run one command on the VM, in the repository folder, for example:
-#                                   infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh
-#   infra/vm.sh push                copy this repository, with config/demo.env, to the VM
-#   infra/vm.sh push-env            copy only config/demo.env to the VM
-#   infra/vm.sh run COMMAND         run a command on the VM without SSH (through the VM agent)
-#   infra/vm.sh jit [HOURS]         ask for just-in-time SSH access from the address you are on now
-#   infra/vm.sh allow-my-ip         point the SSH rule at the address you are on now
-#   infra/vm.sh reset-key [FILE]    install your public SSH key on the VM again
-#   infra/vm.sh nsg-log [HOURS]     who changed the firewall rules, and the rules in force
-#   infra/vm.sh shutdown HHMM|off   change or remove the daily shutdown (time in UTC)
+#   bash infra/vm.sh status              power state, address, SSH access, daily shutdown
+#   bash infra/vm.sh start               start the VM and wait until it answers
+#   bash infra/vm.sh stop                stop and deallocate the VM (ends the compute cost)
+#   bash infra/vm.sh ssh                 open a shell on the VM (opens SSH access first if it is closed)
+#   bash infra/vm.sh ssh COMMAND         run one command on the VM, in the repository folder, for example:
+#                                        bash infra/vm.sh ssh bash ./edge/scripts/inject-anomaly.sh
+#   bash infra/vm.sh push                copy this repository, with config/demo.env, to the VM
+#   bash infra/vm.sh push-env            copy only config/demo.env to the VM
+#   bash infra/vm.sh run COMMAND         run a command on the VM without SSH (through the VM agent)
+#   bash infra/vm.sh jit [HOURS]         ask for just-in-time SSH access from the address you are on now
+#   bash infra/vm.sh allow-my-ip         point the SSH rule at the address you are on now
+#   bash infra/vm.sh reset-key [FILE]    install your public SSH key on the VM again
+#   bash infra/vm.sh nsg-log [HOURS]     who changed the firewall rules, and the rules in force
+#   bash infra/vm.sh shutdown HHMM|off   change or remove the daily shutdown (time in UTC)
 #
 # "ssh" and "push" work out by themselves how SSH is opened in your subscription: by
 # just-in-time access where Microsoft Defender for Cloud controls port 22, otherwise by
@@ -122,7 +122,7 @@ check_ssh_rule() {
   if [[ -n "$found" ]]; then
     info "SSH:            open to your address, $mine (rule $found)"
     if [[ "$found" == *JITRule* ]]; then
-      info "                this is a just-in-time opening and closes by itself; ./infra/vm.sh ssh renews it"
+      info "                this is a just-in-time opening and closes by itself; bash infra/vm.sh ssh renews it"
     fi
     return 0
   fi
@@ -134,14 +134,14 @@ check_ssh_rule() {
   if [[ -n "$jit" || -n "$(jit_policy_id)" ]]; then
     warn "Just-in-time access (Microsoft Defender for Cloud) controls port 22 on this VM."
   fi
-  warn "./infra/vm.sh ssh opens access and connects. Without SSH: ./infra/vm.sh run COMMAND"
+  warn "./infra/vm.sh ssh opens access and connects. Without SSH: bash infra/vm.sh run COMMAND"
   return 1
 }
 # request_jit HOURS: just-in-time access to port 22 from this machine.
 request_jit() {
   local hours="$1" policy mine until vm_id
   policy="$(jit_policy_id)"
-  [[ -n "$policy" ]] || die "No just-in-time policy covers $RESOURCE_GROUP. Use ./infra/vm.sh allow-my-ip instead."
+  [[ -n "$policy" ]] || die "No just-in-time policy covers $RESOURCE_GROUP. Use bash infra/vm.sh allow-my-ip instead."
   mine="$(my_address)"
   mine="${mine%/32}"
   # GNU date first, then the BSD form for macOS.
@@ -151,7 +151,7 @@ request_jit() {
   az rest --method post --url "https://management.azure.com${policy}/initiate?api-version=2020-01-01" \
     --body "{\"virtualMachines\":[{\"id\":\"${vm_id}\",\"ports\":[{\"number\":22,\"allowedSourceAddressPrefix\":\"${mine}\",\"endTimeUtc\":\"${until}\"}]}],\"justification\":\"Wind farm demo deployment\"}" \
     --output none \
-    || die "The request was refused. If it asked for too many hours, ask for fewer: ./infra/vm.sh jit 1"
+    || die "The request was refused. If it asked for too many hours, ask for fewer: bash infra/vm.sh jit 1"
   info "Granted. The rule can take a minute to apply."
 }
 # Points the rule of step 1 at this machine, creating it when asked to.
@@ -193,7 +193,7 @@ ensure_access() {
   local ip
   read_state_and_address
   ip="$IP"
-  [[ "$VM_STATE" == "VM running" ]] || die "The VM is not running (it is: ${VM_STATE:-unknown}). Start it with ./infra/vm.sh start"
+  [[ "$VM_STATE" == "VM running" ]] || die "The VM is not running (it is: ${VM_STATE:-unknown}). Start it with bash infra/vm.sh start"
   [[ -n "$ip" ]] || die "The VM has no public address."
   if port_22_open "$ip"; then return 0; fi
   if [[ -n "$(jit_policy_id)" ]]; then
@@ -204,15 +204,15 @@ ensure_access() {
     point_rule_here
   else
     warn "Port 22 is closed, there is no just-in-time policy, and the SSH rule of step 1 is gone:"
-    warn "something removed it. ./infra/vm.sh nsg-log shows who. If it was a policy of your organisation,"
-    warn "leave it removed and use ./infra/vm.sh run COMMAND, or Azure Bastion for a shell."
-    die "Cannot open SSH access. To create the rule again anyway: ./infra/vm.sh allow-my-ip --create"
+    warn "something removed it. bash infra/vm.sh nsg-log shows who. If it was a policy of your organisation,"
+    warn "leave it removed and use bash infra/vm.sh run COMMAND, or Azure Bastion for a shell."
+    die "Cannot open SSH access. To create the rule again anyway: bash infra/vm.sh allow-my-ip --create"
   fi
   for _ in $(seq 1 24); do
     if port_22_open "$ip"; then return 0; fi
     sleep 5
   done
-  die "Port 22 still does not answer from this machine. ./infra/vm.sh status shows the rules in force; ./infra/vm.sh run COMMAND works without SSH. See 'SSH does not connect' in docs/troubleshooting.md."
+  die "Port 22 still does not answer from this machine. bash infra/vm.sh status shows the rules in force; bash infra/vm.sh run COMMAND works without SSH. See 'SSH does not connect' in docs/troubleshooting.md."
 }
 
 case "$ACTION" in
@@ -225,7 +225,7 @@ case "$ACTION" in
     info "Daily shutdown: $(describe_shutdown)"
     check_ssh_rule || true
     if [[ "$VM_STATE" != "VM running" ]]; then
-      info "Start it with:  ./infra/vm.sh start"
+      info "Start it with:  bash infra/vm.sh start"
     fi
     ;;
 
@@ -240,7 +240,7 @@ case "$ACTION" in
     info "Public address: $(public_ip)"
     info "Daily shutdown: $(describe_shutdown)"
     check_ssh_rule || true
-    info "Connect with:   ./infra/vm.sh ssh"
+    info "Connect with:   bash infra/vm.sh ssh"
     info "K3s, Azure IoT Operations and the simulator start by themselves. Allow about 5 minutes"
     info "before the cluster shows as Connected again and data flows."
     ;;
@@ -293,13 +293,13 @@ case "$ACTION" in
 
   run)
     shift
-    [[ $# -gt 0 ]] || die "Give the command to run on the VM, for example: ./infra/vm.sh run bash ./edge/scripts/simctl.sh status"
+    [[ $# -gt 0 ]] || die "Give the command to run on the VM, for example: bash infra/vm.sh run bash ./edge/scripts/simctl.sh status"
     run_without_ssh "$@"
     ;;
 
   nsg-log)
     HOURS="${2:-24}"
-    [[ "$HOURS" =~ ^[0-9]+$ ]] || die "Give a number of hours, for example: ./infra/vm.sh nsg-log 48"
+    [[ "$HOURS" =~ ^[0-9]+$ ]] || die "Give a number of hours, for example: bash infra/vm.sh nsg-log 48"
     log "Changes to network security groups in $RESOURCE_GROUP, last $HOURS hours"
     az monitor activity-log list --resource-group "$RESOURCE_GROUP" --offset "${HOURS}h" --max-events 1000 \
       --query "sort_by([?contains(operationName.value, 'networkSecurityGroups') && status.value=='Succeeded'], &eventTimestamp)[].{time:eventTimestamp, operation:operationName.value, by:caller}" \
@@ -314,25 +314,25 @@ case "$ACTION" in
 
   jit)
     HOURS="${2:-3}"
-    [[ "$HOURS" =~ ^[1-9][0-9]?$ ]] || die "Give a whole number of hours, for example: ./infra/vm.sh jit 3"
+    [[ "$HOURS" =~ ^[1-9][0-9]?$ ]] || die "Give a whole number of hours, for example: bash infra/vm.sh jit 3"
     request_jit "$HOURS"
-    info "Connect with: ./infra/vm.sh ssh"
+    info "Connect with: bash infra/vm.sh ssh"
     ;;
 
   allow-my-ip)
     if [[ "${2:-}" != "--create" && -n "$(jit_policy_id)" ]]; then
       warn "Just-in-time access (Microsoft Defender for Cloud) controls port 22 on this VM."
-      warn "A rule of your own may be removed again. Ask for access instead: ./infra/vm.sh jit"
-      die "Not changing the rule. To do it anyway: ./infra/vm.sh allow-my-ip --create"
+      warn "A rule of your own may be removed again. Ask for access instead: bash infra/vm.sh jit"
+      die "Not changing the rule. To do it anyway: bash infra/vm.sh allow-my-ip --create"
     fi
     if [[ -z "$(rule_source)" && "${2:-}" != "--create" ]]; then
       warn "The SSH rule $RULE_NAME no longer exists on $NSG_NAME. Step 1 created it, so something removed it."
-      warn "Run ./infra/vm.sh nsg-log to see who. If it was a policy or a security service of your organisation,"
-      warn "leave it removed and use ./infra/vm.sh run COMMAND, or Azure Bastion for an interactive shell."
-      die "Not creating the rule again. To create it anyway: ./infra/vm.sh allow-my-ip --create"
+      warn "Run bash infra/vm.sh nsg-log to see who. If it was a policy or a security service of your organisation,"
+      warn "leave it removed and use bash infra/vm.sh run COMMAND, or Azure Bastion for an interactive shell."
+      die "Not creating the rule again. To create it anyway: bash infra/vm.sh allow-my-ip --create"
     fi
     point_rule_here
-    info "Done. Connect with: ./infra/vm.sh ssh"
+    info "Done. Connect with: bash infra/vm.sh ssh"
     ;;
 
   reset-key)
@@ -347,7 +347,7 @@ case "$ACTION" in
     log "Installing $KEY for $VM_ADMIN on the VM"
     az vm user update --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --username "$VM_ADMIN" \
       --ssh-key-value "$(cat "$KEY")" --output none
-    info "Done. Connect with: ./infra/vm.sh ssh"
+    info "Done. Connect with: bash infra/vm.sh ssh"
     ;;
 
   shutdown)
@@ -355,7 +355,7 @@ case "$ACTION" in
     if [[ "$WHEN" == "off" ]]; then
       log "Removing the daily shutdown"
       az vm auto-shutdown --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --off --output none
-      info "The VM now runs, and costs, until you stop it: ./infra/vm.sh stop"
+      info "The VM now runs, and costs, until you stop it: bash infra/vm.sh stop"
       WHEN=""
     elif [[ "$WHEN" =~ ^([01][0-9]|2[0-3])[0-5][0-9]$ ]]; then
       log "Setting the daily shutdown to ${WHEN:0:2}:${WHEN:2:2} UTC"

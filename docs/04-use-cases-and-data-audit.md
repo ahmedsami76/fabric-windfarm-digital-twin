@@ -223,9 +223,9 @@ The numbers behind these stories vary a little with the day the history ends. Th
 **To demonstrate after 31 December 2026 with the warranty still running,** regenerate the reference data with a later end date, copy it to the VM, upload it and run notebook 01 again:
 
 ```bash
-PYTHONPATH=simulator python3 -m windfarm_sim.sitegen --out data/reference --seed 42 --drivetrain-warranty-end 2027-12-31
-./infra/vm.sh push
-./infra/vm.sh ssh bash ./edge/scripts/07-sync-reference-data.sh
+PYTHONPATH=simulator python3 -m windfarm_sim.sitegen --out data/reference --seed 42 --drivetrain-warranty-end 2027-12-31 &&
+bash infra/vm.sh push &&
+bash infra/vm.sh ssh bash ./edge/scripts/07-sync-reference-data.sh
 ```
 
 ## What is not modelled

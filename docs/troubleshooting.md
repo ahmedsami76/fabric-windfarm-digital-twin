@@ -2,14 +2,14 @@
 
 Ordered along the data path, from the VM to the Lakehouse. Start at the first section whose symptom you see.
 
-Commands in this document are typed on the workstation unless a line says "on the VM". To run a command on the VM, put `./infra/vm.sh ssh` in front of it, or open a shell there with `./infra/vm.sh ssh`.
+Commands in this document are typed on the workstation unless a line says "on the VM". To run a command on the VM, put `bash infra/vm.sh ssh` in front of it, or open a shell there with `bash infra/vm.sh ssh`.
 
 ## Quick diagnosis: where does the data stop?
 
 | Check | Where | Command or place | Healthy result |
 |---|---|---|---|
-| 1. Simulator runs | Edge VM | `./infra/vm.sh ssh bash ./edge/scripts/simctl.sh status` | 12 turbines listed |
-| 2. Messages reach the broker | Edge VM | `./infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20` | 20 JSON messages |
+| 1. Simulator runs | Edge VM | `bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh status` | 12 turbines listed |
+| 2. Messages reach the broker | Edge VM | `bash infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20` | 20 JSON messages |
 | 3. Data flow is healthy | Edge VM | `kubectl get dataflows.connectivity.iotoperations.azure.com,dataflowendpoints.connectivity.iotoperations.azure.com -n azure-iot-operations` | `windfarm-to-fabric` and `fabric-eventstream` listed |
 | 4. Events reach Fabric | Fabric | Eventstream, data preview | Events with `messageType`, `data` and the other envelope fields |
 | 5. Raw rows land | Fabric | Validation query 1 | Six message types, recent |
@@ -21,17 +21,19 @@ Commands in this document are typed on the workstation unless a line says "on th
 ### `Permission denied` when you start a script
 
 ```text
+bash: ./infra/vm.sh: Permission denied
 bash: ./edge/scripts/inject-anomaly.sh: Permission denied
-./edge/scripts/inject-anomaly.sh: line 11: ./edge/scripts/simctl.sh: Permission denied
 ```
 
-The script files have lost their execute permission. This happens when the archive is unpacked on Windows, or the files are uploaded one by one, before they reach Cloud Shell or the VM. `sudo` does not help: the permission belongs to the file, not to the user. In the repository folder, on the machine where it happens:
+The command started the script file directly, without `bash` in front, and the file has no execute permission. Files lose it when an archive is unpacked on Windows, when it is unpacked with `python3 -m zipfile`, or when files are copied or merged one by one. `sudo` does not help: the permission belongs to the file, not to the user.
+
+Start the script through `bash`, which needs no permission on the file:
 
 ```bash
-chmod +x infra/*.sh edge/scripts/*.sh tools/*.sh
+bash infra/vm.sh status
 ```
 
-Starting a script as `bash ./edge/scripts/…` also works, and no script of the repository starts another one in a way that needs the permission.
+Every command in these guides, and every hint a script prints, has this form. No script of the repository starts another one in a way that needs the permission, and `bash tools/check-scripts.sh` fails when a guide or a hint goes back to the direct form. This obstacle came up three times during the validated deployments, each time after an update archive was merged into an existing copy.
 
 ### A script says it runs on the edge VM, or on the workstation
 
@@ -40,23 +42,25 @@ ERROR: This script runs on the edge VM (vm-windfarm-edge), and this machine is '
 ERROR: This script runs on your workstation or in Azure Cloud Shell, not on the edge VM.
 ```
 
-Each script checks where it is. The scripts of `infra/` create Azure resources as you and belong on the workstation. The scripts of `edge/scripts/` work on the cluster and belong on the VM; from the workstation, start them as `./infra/vm.sh ssh bash ./edge/scripts/…`. The check compares the machine's host name with `VM_NAME`. To override it on purpose, set `ALLOW_ANY_HOST=1` for an edge script or `ALLOW_NON_USER_LOGIN=1` for a workstation script.
+Each script checks where it is. The scripts of `infra/` create Azure resources as you and belong on the workstation. The scripts of `edge/scripts/` work on the cluster and belong on the VM; from the workstation, start them as `bash infra/vm.sh ssh bash ./edge/scripts/…`. The check compares the machine's host name with `VM_NAME`. To override it on purpose, set `ALLOW_ANY_HOST=1` for an edge script or `ALLOW_NON_USER_LOGIN=1` for a workstation script.
 
 ### The workstation lost its copy of the repository or of `config/demo.env`
 
 Azure Cloud Shell keeps files only with a mounted storage account, and a new workstation has none of them. Unpack the archive again, sign in with `az login`, and rebuild the settings from what is deployed:
 
 ```bash
-./infra/rebuild-env.sh          # reads resource group rg-windfarm-edge; give another name as an argument
-./infra/vm.sh reset-key         # installs this workstation's SSH key on the VM, creating one if there is none
-./infra/vm.sh status
+bash infra/rebuild-env.sh &&
+bash infra/vm.sh reset-key &&
+bash infra/vm.sh status
 ```
+
+The first line reads resource group `rg-windfarm-edge`; give another name as an argument. The second installs this workstation's SSH key on the VM and creates one if there is none. The lines are chained with `&&`: when one stops, the next ones do not run on half a result.
 
 `rebuild-env.sh` changes nothing in Azure. It lists the settings it could not find; the Custom Locations object ID is among them when the sign-in may not read Microsoft Entra ID. The script has scenario tests against stand-in commands and has not run against Azure yet.
 
 ### `CUSTOM_LOCATIONS_OID is empty`, or another setting is missing, on the VM
 
-The VM has an older copy of `config/demo.env` than the workstation. Send it again: `./infra/vm.sh push-env`.
+The VM has an older copy of `config/demo.env` than the workstation. Send it again: `bash infra/vm.sh push-env`.
 
 ## Edge VM
 
@@ -71,7 +75,7 @@ Step 1 tries every size in `VM_SIZE`, skips the ones that Azure lists as restric
 1. List the 8-vCPU D-series sizes of the region. Sizes with `None` in the restrictions column are offered; a temporary capacity shortage does not show here.
 
    ```bash
-   source config/demo.env
+   source config/demo.env &&
    az vm list-skus --location "$LOCATION" --resource-type virtualMachines --size Standard_D8 --output table
    ```
 
@@ -99,37 +103,37 @@ Do not change the GUID in the command; it is the same in every tenant. The value
 
 ### SSH does not connect
 
-Use `./infra/vm.sh ssh` instead of `ssh`. It signs in as the right user, and when port 22 is closed it opens access the way your subscription allows before it connects. If it still fails, this shows the state:
+Use `bash infra/vm.sh ssh` instead of `ssh`. It signs in as the right user, and when port 22 is closed it opens access the way your subscription allows before it connects. If it still fails, this shows the state:
 
 ```bash
-./infra/vm.sh status
+bash infra/vm.sh status
 ```
 
 **`Connection timed out`** has three usual causes.
 
-- **Just-in-time access controls port 22.** In subscriptions that an organisation governs, Microsoft Defender for Cloud takes over the management ports of a new VM within hours: the rule that step 1 created disappears, and port 22 opens only on request, to one address, for a few hours. This happened on the first run of this guide, in a Microsoft-managed demo subscription: SSH worked for steps 2 and 3 and timed out two hours later. `./infra/vm.sh ssh` and `push` ask for access by themselves; `./infra/vm.sh jit 3` asks without connecting. If the request is refused, ask for fewer hours (`./infra/vm.sh jit 1`), or request access in the Azure portal: the VM, **Connect**, **Request access**. Do not recreate the SSH rule by hand; it is removed again.
-- **Power state is `VM deallocated`.** The daily shutdown stopped the VM. The time in `VM_AUTO_SHUTDOWN_UTC` is UTC, so `0200` is 20:00 in Houston. Start it with `./infra/vm.sh start`; the address stays the same. To move the shutdown: `./infra/vm.sh shutdown 0800` (or `off`).
-- **Port 22 is open to a different address from the one you are on.** Cloud Shell can come from a new address in each session, and home and office connections change too. `./infra/vm.sh ssh` corrects this.
+- **Just-in-time access controls port 22.** In subscriptions that an organisation governs, Microsoft Defender for Cloud takes over the management ports of a new VM within hours: the rule that step 1 created disappears, and port 22 opens only on request, to one address, for a few hours. This happened on the first run of this guide, in a Microsoft-managed demo subscription: SSH worked for steps 2 and 3 and timed out two hours later. `bash infra/vm.sh ssh` and `push` ask for access by themselves; `bash infra/vm.sh jit 3` asks without connecting. If the request is refused, ask for fewer hours (`bash infra/vm.sh jit 1`), or request access in the Azure portal: the VM, **Connect**, **Request access**. Do not recreate the SSH rule by hand; it is removed again.
+- **Power state is `VM deallocated`.** The daily shutdown stopped the VM. The time in `VM_AUTO_SHUTDOWN_UTC` is UTC, so `0200` is 20:00 in Houston. Start it with `bash infra/vm.sh start`; the address stays the same. To move the shutdown: `bash infra/vm.sh shutdown 0800` (or `off`).
+- **Port 22 is open to a different address from the one you are on.** Cloud Shell can come from a new address in each session, and home and office connections change too. `bash infra/vm.sh ssh` corrects this.
 
 **`Permission denied (publickey)`** has two causes.
 
-- **The wrong user name.** The VM's administrator is `azureuser` (`VM_ADMIN`), not your own name. `./infra/vm.sh ssh` uses it.
+- **The wrong user name.** The VM's administrator is `azureuser` (`VM_ADMIN`), not your own name. `bash infra/vm.sh ssh` uses it.
 - **The key is gone.** Step 1 created the key in `~/.ssh` on the workstation. A Cloud Shell without a storage account loses it with the session, and another machine never had it. Install the key of the machine you are on:
 
   ```bash
-  ./infra/vm.sh reset-key
+  bash infra/vm.sh reset-key
   ```
 
 **No SSH at all.** Where a policy forbids inbound SSH altogether, work through the VM agent:
 
 ```bash
-./infra/vm.sh run kubectl get pods -n azure-iot-operations
-./infra/vm.sh run bash ./edge/scripts/05-deploy-simulator.sh
-./infra/vm.sh run bash ./edge/scripts/simctl.sh status
-./infra/vm.sh run bash ./edge/scripts/mqtt-peek.sh --count 20
+bash infra/vm.sh run kubectl get pods -n azure-iot-operations
+bash infra/vm.sh run bash ./edge/scripts/05-deploy-simulator.sh
+bash infra/vm.sh run bash ./edge/scripts/simctl.sh status
+bash infra/vm.sh run bash ./edge/scripts/mqtt-peek.sh --count 20
 ```
 
-`run` is not interactive, takes at least 20 seconds, returns only the last 4,096 bytes of output and runs one command at a time. `./infra/vm.sh push` needs SSH; without it, put the repository on GitHub and clone it on the VM with `./infra/vm.sh run`, or connect through Azure Bastion. `./infra/vm.sh nsg-log` shows who changed the firewall rules and which are in force.
+`run` is not interactive, takes at least 20 seconds, returns only the last 4,096 bytes of output and runs one command at a time. `bash infra/vm.sh push` needs SSH; without it, put the repository on GitHub and clone it on the VM with `bash infra/vm.sh run`, or connect through Azure Bastion. `bash infra/vm.sh nsg-log` shows who changed the firewall rules and which are in force.
 
 After a start, K3s and everything on it come up by themselves. Allow about 5 minutes before the cluster shows as Connected. If a workstation step was running when the VM stopped, run that step again.
 
@@ -144,11 +148,11 @@ After a start, K3s and everything on it come up by themselves. Allow about 5 min
 Commands to assign the roles for `identity` mode (workstation):
 
 ```bash
-source config/demo.env
-PRINCIPAL_ID=$(az vm show --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --query identity.principalId --output tsv)
+source config/demo.env &&
+PRINCIPAL_ID=$(az vm show --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --query identity.principalId --output tsv) &&
 az role assignment create --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal \
   --role "Kubernetes Cluster - Azure Arc Onboarding" \
-  --scope "$(az group show --name "$RESOURCE_GROUP" --query id --output tsv)"
+  --scope "$(az group show --name "$RESOURCE_GROUP" --query id --output tsv)" &&
 az role assignment create --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal \
   --role "Reader" --scope "/subscriptions/$SUBSCRIPTION_ID"
 ```
@@ -159,36 +163,39 @@ Symptom: step 4 fails with `Custom Locations Error: "Microsoft.ExtendedLocation"
 
 Two causes, both silent in `az connectedk8s enable-features` when the VM signs in with its managed identity: the command cannot validate the object ID and uses the given value as it is; and it only warns when it leaves the feature out. In the second deployment the setting held the name of the custom location, `cl-windfarm-edge`, instead of the object ID. The scripts now refuse a value that is not an object ID, and step 3 stops when the feature was left out. A value that has the right form but is not the Custom Locations object ID of your tenant still shows only in step 4.
 
-To repair a cluster after step 4 has failed this way: correct `CUSTOM_LOCATIONS_OID` in `config/demo.env`, run `./infra/vm.sh push-env`, run step 3 again, then step 4 again.
+To repair a cluster after step 4 has failed this way: correct `CUSTOM_LOCATIONS_OID` in `config/demo.env`, run `bash infra/vm.sh push-env`, run step 3 again, then step 4 again.
 
 1. Confirm `CUSTOM_LOCATIONS_OID` in `config/demo.env` on the VM is the value step 1 printed. Get it again on the workstation with
    `az ad sp show --id bc313c14-388c-4e7d-a58e-70017303ee3b --query id -o tsv`.
 2. In `identity` mode, confirm the VM identity has Reader on the subscription. Without it the CLI cannot confirm that the `Microsoft.ExtendedLocation` provider is registered and skips the feature.
-3. Run step 3 again (`./infra/vm.sh ssh bash ./edge/scripts/03-arc-enable.sh`). It skips the connect step when the cluster is already connected.
+3. Run step 3 again (`bash infra/vm.sh ssh bash ./edge/scripts/03-arc-enable.sh`). It skips the connect step when the cluster is already connected.
 
 ### Alternative for step 3: onboard from the workstation
 
 If neither sign-in mode works on the VM, run the Arc commands on the workstation, as yourself, through an SSH tunnel to the cluster's API server. You need `kubectl` on the workstation (Cloud Shell has it).
 
 ```bash
-# Workstation
-source config/demo.env
-VM_IP="$(az vm show --show-details --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --query publicIps --output tsv)"
-scp "${VM_ADMIN}@${VM_IP}:/etc/rancher/k3s/k3s.yaml" ./k3s.yaml
-ssh -f -N -L 6443:127.0.0.1:6443 "${VM_ADMIN}@${VM_IP}"
-export KUBECONFIG=$PWD/k3s.yaml
+# Workstation: a tunnel to the cluster. Go on only when the last line lists the node.
+source config/demo.env &&
+VM_IP="$(az vm show --show-details --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --query publicIps --output tsv)" &&
+scp "${VM_ADMIN}@${VM_IP}:/etc/rancher/k3s/k3s.yaml" ./k3s.yaml &&
+ssh -f -N -L 6443:127.0.0.1:6443 "${VM_ADMIN}@${VM_IP}" &&
+export KUBECONFIG=$PWD/k3s.yaml &&
 kubectl get nodes
+```
 
+```bash
+# Workstation: connect the cluster to Azure Arc
 az connectedk8s connect --name "$CLUSTER_NAME" --location "$LOCATION" \
   --resource-group "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION_ID" \
-  --enable-oidc-issuer --enable-workload-identity --disable-auto-upgrade
+  --enable-oidc-issuer --enable-workload-identity --disable-auto-upgrade &&
 az connectedk8s show --resource-group "$RESOURCE_GROUP" --name "$CLUSTER_NAME" \
-  --query oidcIssuerProfile.issuerUrl --output tsv
+  --query oidcIssuerProfile.issuerUrl --output tsv &&
 az connectedk8s enable-features --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" \
   --custom-locations-oid "$CUSTOM_LOCATIONS_OID" --features cluster-connect custom-locations
 ```
 
-Then, on the VM (`./infra/vm.sh ssh` opens a shell there), write the issuer URL printed above into the K3s configuration and restart K3s. Paste the URL in place of the text in capitals:
+Then, on the VM (`bash infra/vm.sh ssh` opens a shell there), write the issuer URL printed above into the K3s configuration and restart K3s. Paste the URL in place of the text in capitals:
 
 ```bash
 ISSUER_URL="PASTE THE ISSUER URL HERE"
@@ -234,13 +241,13 @@ If the session closed anyway: the part that was running in Azure continues. Open
 `az iot ops init` asks Azure Resource Health about the cluster before it deploys, and stops when the answer stays `Unavailable`. Nothing has been installed at that point. Tell the causes apart on the workstation:
 
 ```bash
-./infra/vm.sh status
-./infra/vm.sh run kubectl get pods -n azure-arc
+bash infra/vm.sh status
+bash infra/vm.sh run kubectl get pods -n azure-arc
 ```
 
-- **The VM is stopped.** The daily shutdown is the usual reason; its time is in UTC. Start the VM with `./infra/vm.sh start` and move the shutdown with `./infra/vm.sh shutdown 0800`.
+- **The VM is stopped.** The daily shutdown is the usual reason; its time is in UTC. Start the VM with `bash infra/vm.sh start` and move the shutdown with `bash infra/vm.sh shutdown 0800`.
 - **The VM runs and every pod is `Running`.** The cluster was connected to Azure Arc a few minutes ago and Resource Health has not caught up. This happened twice in the second deployment: five minutes after step 3, and again at `az iot ops create`, right after `init` had installed its two extensions. Step 4 now lets both commands ask for up to 20 minutes. To see the status yourself: `az rest --method get --query "properties.[availabilityState, title]" --output tsv --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Kubernetes/connectedClusters/$CLUSTER_NAME/providers/Microsoft.ResourceHealth/availabilityStatuses/current?api-version=2025-05-01"`. Run step 4 again when it prints `Available`.
-- **A pod stays `Pending`, `ContainerCreating` or `CrashLoopBackOff`.** `./infra/vm.sh ssh kubectl describe pod NAME -n azure-arc` shows why.
+- **A pod stays `Pending`, `ContainerCreating` or `CrashLoopBackOff`.** `bash infra/vm.sh ssh kubectl describe pod NAME -n azure-arc` shows why.
 
 ### Step 4: Azure IoT Operations deployment fails or times out
 
@@ -272,7 +279,7 @@ kubectl logs -n windfarm deploy/windfarm-simulator --tail=50
 
 Work through these in order.
 
-1. **The simulator publishes.** `./infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20` shows messages. If not, see the section above.
+1. **The simulator publishes.** `bash infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20` shows messages. If not, see the section above.
 2. **The data flow exists and is enabled.** In the operations experience (https://iotoperations.azure.com), open your instance and look at **Data flows** and **Data flow endpoints**. Or on the VM:
 
    ```bash
@@ -282,7 +289,7 @@ Work through these in order.
    ```
 
    Authentication or authorization errors in this log point to step 3 below. Connection errors point to step 4.
-3. **The identity has access.** The Azure IoT Operations Arc extension identity must be a Contributor on the Fabric workspace (step 6.5), and both tenant settings from step 0 must be enabled. Changes can take several minutes to take effect. After fixing access, run `./infra/06-connect-edge-to-fabric.sh` again. If events still do not arrive, restart the data flow pods on the VM; they are recreated at once: `kubectl get pods -n azure-iot-operations -o name | grep -i dataflow | xargs kubectl delete -n azure-iot-operations`.
+3. **The identity has access.** The Azure IoT Operations Arc extension identity must be a Contributor on the Fabric workspace (step 6.5), and both tenant settings from step 0 must be enabled. Changes can take several minutes to take effect. After fixing access, run `bash infra/06-connect-edge-to-fabric.sh` again. If events still do not arrive, restart the data flow pods on the VM; they are recreated at once: `kubectl get pods -n azure-iot-operations -o name | grep -i dataflow | xargs kubectl delete -n azure-iot-operations`.
 4. **The endpoint values are right.** `EVENTSTREAM_BOOTSTRAP_SERVER` and `EVENTSTREAM_TOPIC` must come from the **Kafka** tab, section **Entra ID Authentication**, of the custom endpoint source. The host ends in `.servicebus.windows.net:9093` and the topic starts with `es_`. The eventstream must be published.
 5. **Fall back to key authentication.** If managed identity authentication cannot be made to work in your tenant, use the connection string of the custom endpoint instead. In the eventstream, open the **Kafka** tab, section **SAS Key Authentication**, and copy **Connection string-primary key**.
 
@@ -401,12 +408,12 @@ They should differ a little: the stories in the history are placed relative to t
 `simctl inject` warns when the target turbine is not generating. In light wind the turbine idles, the drivetrain does not turn and a gearbox fault has little to show. Raise the wind, wait 5 minutes and inject again:
 
 ```bash
-./infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m
+bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --mean 11 --duration 60m
 ```
 
 ### WT-07 stands out before any fault is injected, or WT-05 and WT-09 produce less
 
-That is intended. Three turbines carry a standing condition from the site's history: a worn gearbox bearing on WT-07 (warmer and rougher, no alarm), a yaw offset of about 9 degrees on WT-05 and eroded blades on WT-09 (both about 4 percent less power). `simctl.sh status` lists them. To run without them, set `STANDING_CONDITIONS` to `"false"` in `edge/k8s/simulator.yaml`, run `./infra/vm.sh push` and step 5 again; the live data then no longer matches the history.
+That is intended. Three turbines carry a standing condition from the site's history: a worn gearbox bearing on WT-07 (warmer and rougher, no alarm), a yaw offset of about 9 degrees on WT-05 and eroded blades on WT-09 (both about 4 percent less power). `simctl.sh status` lists them. To run without them, set `STANDING_CONDITIONS` to `"false"` in `edge/k8s/simulator.yaml`, run `bash infra/vm.sh push` and step 5 again; the live data then no longer matches the history.
 
 ### An alarm stays active after the simulator was restarted
 
@@ -418,10 +425,10 @@ About once an hour the simulator produces a small event by itself: a short commu
 
 ### No data after the VM was restarted
 
-Allow 5 minutes. Then check, on the VM (`./infra/vm.sh ssh` opens a shell there): `kubectl get pods -A | grep -v -E 'Running|Completed'` and `bash ./edge/scripts/simctl.sh status`. On the workstation, `./infra/vm.sh status` shows whether the VM is running, and this should return `Connected`:
+Allow 5 minutes. Then check, on the VM (`bash infra/vm.sh ssh` opens a shell there): `kubectl get pods -A | grep -v -E 'Running|Completed'` and `bash ./edge/scripts/simctl.sh status`. On the workstation, `bash infra/vm.sh status` shows whether the VM is running, and this should return `Connected`:
 
 ```bash
-source config/demo.env
+source config/demo.env &&
 az resource show --resource-type Microsoft.Kubernetes/connectedClusters --name "$CLUSTER_NAME" \
   --resource-group "$RESOURCE_GROUP" --query properties.connectivityStatus --output tsv
 ```
@@ -445,7 +452,7 @@ Exception Details: (None) Cannot connect to the hybrid connection because no age
 
 The script tries again by itself, up to four times with 2.5 minutes in between, as long as the VM is running. If Azure never reaches the cluster, it goes on to delete the resource group. That is safe: the uninstall protects a cluster that is kept, and this cluster is deleted with its VM. Check the result with `az group exists --name "$RESOURCE_GROUP"`.
 
-To give the agents more time, set the number of attempts or the pause in front of the command, for example `UNINSTALL_ATTEMPTS=8 bash infra/99-cleanup.sh --azure`. To see whether the agents are up, run `./infra/vm.sh ssh kubectl get pods -n azure-arc`. The Azure Arc troubleshooting article ties this error message to the `clusterconnect-agent` pods.
+To give the agents more time, set the number of attempts or the pause in front of the command, for example `UNINSTALL_ATTEMPTS=8 bash infra/99-cleanup.sh --azure`. To see whether the agents are up, run `bash infra/vm.sh ssh kubectl get pods -n azure-arc`. The Azure Arc troubleshooting article ties this error message to the `clusterconnect-agent` pods.
 
 The first version of the script, of 20 November 2026 in the early evening, made one attempt only and printed `The uninstall did not finish cleanly`. It went on to the resource group in the same way.
 

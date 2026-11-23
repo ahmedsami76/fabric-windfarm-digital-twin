@@ -46,5 +46,5 @@ kubectl logs deployment/windfarm-simulator -n "$SIM_NAMESPACE" --tail=15
 
 log "Done"
 info "From the workstation:"
-info "  Status:        ./infra/vm.sh ssh bash ./edge/scripts/simctl.sh status"
-info "  Watch topics:  ./infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20"
+info "  Status:        bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh status"
+info "  Watch topics:  bash infra/vm.sh ssh bash ./edge/scripts/mqtt-peek.sh --count 20"

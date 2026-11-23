@@ -65,6 +65,7 @@ python3 tools/local-spark/run_phase2.py --lakehouse /tmp/lakehouse
 | `notebooks/09_build_data_agent.ipynb` | Runs the example queries, creates and publishes the data agent **WindFarmDataAgent** |
 | `notebooks/10_test_data_agent.ipynb` | Asks the agent the question bank and has each answer judged against the reference query |
 | `notebooks/11_build_ontology.ipynb` | Creates the ontology **WindFarmOntology** from its definition |
+| `notebooks/12_send_edge_command.ipynb` | Phase 5a: sends one operating command (curtail, release, stop, start, reset) to a turbine through the eventstream **WindFarmCommands**. Built by `tools/build-phase5.py` from `tools/edge_command.py` |
 | `data-agent/` | What notebook 09 carries, for reading and for pasting by hand: instructions, descriptions, example queries, `agent-spec.json` |
 | `ontology/ontology-spec.json` | The ontology that notebook 11 carries, with its identifiers |
 | `operations-agent/` | Business goals and instructions to paste into the operations agent |

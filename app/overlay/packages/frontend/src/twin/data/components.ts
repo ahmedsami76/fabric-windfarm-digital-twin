@@ -6,14 +6,14 @@
  * part the data agent and the ontology know.
  *
  * Condition has two steps, and each means one thing:
- *   2  the turbine controller has a warning or critical alarm on this component right now, or the
- *      gearbox vibration is at the level of its alarm
+ *   2  the turbine controller has a warning or critical alarm on this component right now
  *   1  no alarm, but a value is past a level worth watching: the gearbox thresholds the operations
  *      agent uses for its early warning, and the twin's own level for the yaw error
+ * A reading above the controller's limit without an alarm is step 1: the controller has not confirmed it.
  * Alarms of severity `info` (a cable untwist, a stop by the operator) colour nothing.
  */
 import type { Alarm, TurbineLive } from './contract';
-import { WATCH_YAW_ERROR, gearboxLevel } from './site';
+import { WATCH_YAW_ERROR, gearboxWatch } from './site';
 
 export type PartKey = 'BLD' | 'PIT' | 'ROT' | 'MBR' | 'GBX' | 'GEN' | 'CNV' | 'TRF' | 'HYD' | 'YAW' | 'TWR';
 
@@ -84,7 +84,7 @@ export function componentStatus(turbine: TurbineLive, alarms: Alarm[]): Componen
   return PARTS.map((part) => {
     const active = mine.filter((a) => partOfAlarm(a) === part.key);
     const watch =
-      part.key === 'GBX' ? gearboxLevel(turbine.gearboxVibration, turbine.gearboxOilTemp) : part.key === 'YAW' && Math.abs(turbine.yawError) > WATCH_YAW_ERROR ? 1 : 0;
+      part.key === 'GBX' ? gearboxWatch(turbine.gearboxVibration, turbine.gearboxOilTemp) : part.key === 'YAW' && Math.abs(turbine.yawError) > WATCH_YAW_ERROR ? 1 : 0;
     return {
       key: part.key,
       name: part.name,
@@ -98,4 +98,16 @@ export function componentStatus(turbine: TurbineLive, alarms: Alarm[]): Componen
 /** What the turbine panel asks the data agent about one component. */
 export function componentQuestion(turbineId: string, part: Pick<Part, 'name'>): string {
   return `What stops and work orders has the ${part.name.toLowerCase()} of ${turbineId} had?`;
+}
+
+/**
+ * Condition of the gearbox of one turbine, for the halo on the ground, the nacelle and the list of
+ * turbines: 2 when the controller has a warning or critical alarm on the gearbox, 1 when a reading is
+ * past the early warning, 0 otherwise. `alarms` may hold other turbines' too.
+ */
+export function gearboxCondition(turbine: TurbineLive, alarms: Alarm[]): 0 | 1 | 2 {
+  const alarmed = alarms.some(
+    (a) => a.turbineId === turbine.id && (a.severity === 'warning' || a.severity === 'critical') && partOfAlarm(a) === 'GBX',
+  );
+  return alarmed ? 2 : gearboxWatch(turbine.gearboxVibration, turbine.gearboxOilTemp);
 }

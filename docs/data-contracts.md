@@ -18,7 +18,7 @@ All topics start with `contoso/windfarm/{siteId}`. The site in this repository i
 | `…/_sim/response/{requestId}` | Acknowledgement | Simulator | Per command | No | No |
 | `…/_sim/status` | Simulator status | Simulator | Every 30 s | Yes | No |
 | `…/_sim/events` | Anomaly ground truth | Simulator | When an anomaly starts or ends | No | No |
-| `…/_control/request` | Operating command | Reserved for the cloud-to-edge path (Phase 5) | On demand | No | No |
+| `…/_control/request` | Operating command | The data flow `fabric-to-windfarm-control` of Phase 5a, from the Fabric eventstream `WindFarmCommands`; written there by notebook `12_send_edge_command` | On demand | No | No |
 | `…/_control/response/{requestId}` | Acknowledgement | Simulator | Per command | No | No |
 
 Messages are published with QoS 1. Turbine ids are `WT-01` to `WT-12`.

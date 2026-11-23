@@ -31,6 +31,14 @@ export class NoPrincipal extends Error {
   }
 }
 
+/** The app has secrets, or should have, and the host could not hand them over. */
+export class SecretsUnreadable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SecretsUnreadable';
+  }
+}
+
 /** Microsoft Entra ID did not give the service principal a token. */
 export class PrincipalRefused extends Error {
   constructor(message: string) {
@@ -42,15 +50,21 @@ export class PrincipalRefused extends Error {
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Reads the three secrets. `secret` returns the value of one, and throws or returns nothing when the
- * app has no secret of that name.
+ * Reads the three secrets. `secret` returns the value of one. When the app has no secret of that name
+ * it returns nothing or throws the host's "No value available for secret …": that is "not set up".
+ * Anything else it throws means the host could not read the secrets at all, which is a failure and
+ * is reported as one, with what the host said.
  */
 export function readPrincipal(secret: (name: string) => string | undefined): Principal {
   const read = (name: string): string => {
     let value: string | undefined;
     try {
       value = secret(name);
-    } catch {
+    } catch (error) {
+      const said = error instanceof Error ? error.message : String(error);
+      if (!/no value available for secret/i.test(said)) {
+        throw new SecretsUnreadable(`The secrets of the app could not be read (${name}): ${brief(said)}`);
+      }
       value = undefined;
     }
     value = value?.trim();

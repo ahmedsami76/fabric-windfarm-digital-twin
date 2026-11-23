@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { PARTS, type PartKey } from '../overlay/packages/frontend/src/twin/data/components';
 import { buildExploded } from '../overlay/packages/frontend/src/twin/scene/exploded';
-import { buildTurbine } from '../overlay/packages/frontend/src/twin/scene/turbine';
+import { LEVEL_COLOR, STATE_COLOR, buildTurbine, haloColor, haloOpacity } from '../overlay/packages/frontend/src/twin/scene/turbine';
 
 /** A turbine with its inside built, closed (`open` 0) or fully open (1). */
 function turbine(open: 0 | 1) {
@@ -101,5 +101,32 @@ describe('the opened turbine', () => {
       expect(inside.parts.get('BLD')!.anchor.parent).toBe(view.blades[index]);
       expect(inside.parts.get('PIT')!.anchor.parent).toBe(view.arms[index]);
     }
+  });
+});
+
+describe('the ring and the halo on the ground', () => {
+  it('gives the halo the colour of the gearbox condition, whatever the state: a running turbine at the alarm level has a red halo', () => {
+    expect(haloColor('RUNNING', 1)).toBe(LEVEL_COLOR[1]);
+    expect(haloColor('RUNNING', 2)).toBe(LEVEL_COLOR[2]);
+    expect(haloColor('DERATED', 2)).toBe(LEVEL_COLOR[2]);
+    expect(LEVEL_COLOR[1]).toBe(STATE_COLOR.DERATED); // one amber and one red in the whole picture
+    expect(LEVEL_COLOR[2]).toBe(STATE_COLOR.FAULT);
+  });
+  it('gives the halo the colour of the state when the gearbox is in order', () => {
+    expect(haloColor('RUNNING', 0)).toBe(STATE_COLOR.RUNNING);
+    expect(haloColor('CURTAILED', 0)).toBe(STATE_COLOR.CURTAILED);
+    expect(haloColor('FAULT', 0)).toBe(STATE_COLOR.FAULT);
+  });
+  it('shows the halo of a turbine in trouble without anyone selecting it, stronger at the alarm level, and hides it on a healthy one', () => {
+    expect(haloOpacity('RUNNING', 0, false, false, 0)).toBe(0);
+    const early = haloOpacity('RUNNING', 1, false, false, 0);
+    const alarm = haloOpacity('RUNNING', 2, false, false, 0);
+    expect(early).toBeGreaterThan(0.2);
+    expect(alarm).toBeGreaterThan(early);
+    expect(haloOpacity('RUNNING', 2, true, true, 0)).toBeGreaterThan(alarm);
+    expect(haloOpacity('RUNNING', 0, true, true, 0)).toBeGreaterThan(0);
+  });
+  it('lets a fault pulse', () => {
+    expect(haloOpacity('FAULT', 2, false, false, 1)).toBeGreaterThan(haloOpacity('FAULT', 2, false, false, 0));
   });
 });

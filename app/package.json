@@ -12,11 +12,13 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@types/mssql": "^12.3.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/three": "0.187.0",
     "esbuild": "^0.28.2",
+    "mssql": "^12.8.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "three": "0.187.0",

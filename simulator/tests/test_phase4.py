@@ -39,9 +39,34 @@ def test_function_types_list_exactly_the_registered_functions():
     app = (OVERLAY / "functions" / "src" / "function_app.ts").read_text(encoding="utf-8")
     types = (OVERLAY / "functions" / "src" / "types.ts").read_text(encoding="utf-8")
     registered = re.findall(r"udf\.func\(\s*'(\w+)'", app)
-    assert registered == ["getLiveState", "getTurbineTrend", "askAgent", "getDiagnostics"]
+    assert registered == [
+        "getLiveState", "getTurbineTrend", "getDiagnostics",                               # the Eventhouse route
+        "getLiveStateLakehouse", "getTurbineTrendLakehouse", "getDiagnosticsLakehouse",    # the Lakehouse route
+        "askAgent",
+    ]
     assert re.findall(r"^  (\w+): \{$", types, flags=re.M) == registered
     assert "ctx.getToken(" not in app and "getSecret(" not in app  # the deprecated calls
+
+
+def test_no_function_declares_what_the_platform_refuses():
+    """A custom audience made every call of the function fail at the first deployment (obstacle E), and
+    the SQL audience belongs to the Lakehouse functions alone, so that it cannot stop the others."""
+    app = (OVERLAY / "functions" / "src" / "function_app.ts").read_text(encoding="utf-8")
+    declared = dict(re.findall(r"udf\.func\(\s*'(\w+)',.*?RayfinContext<NoTables, ([^>]*)>", app, flags=re.S))
+    assert len(declared) == 7
+    for name, audiences in declared.items():
+        assert "https://" not in audiences and "api://" not in audiences, name
+        wants_sql = name.endswith("Lakehouse")
+        assert audiences == ("AudienceType.Fabric | AudienceType.Sql" if wants_sql else "AudienceType.Fabric"), name
+
+
+def test_twin_sql_is_checked():
+    """The T-SQL of the Lakehouse route: names, syntax and meaning (tools/check-twin-sql.py)."""
+    import subprocess
+    import sys
+    result = subprocess.run([sys.executable, str(REPO / "tools" / "check-twin-sql.py")], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "all checks passed" in result.stdout or result.stdout.startswith("SKIP")
 
 
 def test_functions_use_names_of_the_earlier_phases():
@@ -66,9 +91,11 @@ def test_app_queries_use_columns_that_exist():
         definition = re.search(rf"\.create-merge table {table} \(([^)]*)\)", tables).group(1)
         return {part.split(":")[0].strip() for part in definition.split(",")}
 
-    telemetry = re.search(r"TURBINES_QUERY = `(.*?)`;", live, flags=re.S).group(1)
-    asked = re.search(r"arg_max\(Timestamp, ([^)]*)\)", telemetry).group(1)
-    assert {c.strip() for c in asked.split(",")} <= columns("TurbineTelemetry")
+    # One list of columns serves the KQL and the T-SQL query of the turbines.
+    listed = re.search(r"TELEMETRY_COLUMNS = \[(.*?)\] as const;", live, flags=re.S).group(1)
+    asked = set(re.findall(r"'(\w+)'", listed))
+    assert len(asked) == 20 and asked <= columns("TurbineTelemetry")
+    assert live.count("${TELEMETRY_COLUMNS.join(', ')}") == 3  # arg_max in KQL; inner and outer SELECT in T-SQL
     weather = re.search(r"WEATHER_QUERY = `(.*?)`;", live, flags=re.S).group(1)
     asked = re.search(r"arg_max\(Timestamp, ([^)]*)\)", weather).group(1)
     assert {c.strip() for c in asked.split(",")} <= columns("WeatherObservations")

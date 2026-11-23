@@ -331,21 +331,36 @@ W="$APPDIR/windfarm-twin"
 app_reset; app_run
 OUT="$OUT
 app:$(grep -c "TwinApp" "$W/packages/frontend/src/App.tsx") twin:$([[ -f "$W/packages/frontend/src/twin/scene/SceneEngine.ts" ]] && echo yes) fn:$(grep -c "getLiveState" "$W/packages/functions/src/function_app.ts") title:$(grep -c "Northwind Ridge" "$W/packages/frontend/index.html")"
-check "create-app, fresh: scaffolds at the pinned version, adds the pack, copies the twin, installs three.js, checks" 0 "create-rayfin@2.0.1 --project-name windfarm-twin --template blankapp" "npm run pack:add -- functions (in windfarm-twin)" "app:[1-9]" "twin:yes" "fn:[1-9]" "title:1" "three@0.187.0" "@types/three@0.187.0" "npm run typecheck (in windfarm-twin)" "npx rayfin up --workspace WindFarmDigitalTwin"
+check "create-app, fresh: scaffolds at the pinned version, adds the pack, copies the twin, installs three.js, checks" 0 "create-rayfin@2.0.1 --project-name windfarm-twin --template blankapp" "npm run pack:add -- functions (in windfarm-twin)" "app:[1-9]" "twin:yes" "fn:[1-9]" "title:1" "three@0.187.0" "@types/three@0.187.0" "-w @rayfin-app/functions mssql@12.8.1" "@types/mssql@12.3.0" "npm run typecheck (in windfarm-twin)" "npx rayfin up --workspace WindFarmDigitalTwin" "create-principal.sh"
 
 : > "$STUB_DIR/calls.log"; echo "// edited by hand" > "$W/packages/frontend/src/twin/TwinApp.tsx"; app_run
 OUT="$OUT
 restored:$(grep -c "edited by hand" "$W/packages/frontend/src/twin/TwinApp.tsx")"
-check "create-app, run again: keeps the app, adds nothing twice, copies the overlay again" 0 "keeping it" "already there" "already a dependency" "restored:0" "npm run typecheck (in windfarm-twin)" "!create-rayfin" "!pack:add" "!npm install"
+check "create-app, run again: keeps the app, adds nothing twice, copies the overlay again" 0 "keeping it" "already there" "already a dependency" "already a dependency of the functions" "restored:0" "npm run typecheck (in windfarm-twin)" "!create-rayfin" "!pack:add" "!npm install"
 
 : > "$STUB_DIR/calls.log"; app_run --overlay
 check "create-app --overlay: copies only" 0 "Copied the twin" "!create-rayfin" "!npm run typecheck (in" "!npm install"
 
+# An app made before the Lakehouse route: its functions package has no SQL driver yet.
+sed -i 's| "mssql": "12.8.1",||' "$W/packages/functions/package.json"; : > "$STUB_DIR/calls.log"; app_run --overlay
+check "create-app --overlay, an update that needs a new library: copies, then says to run without the option" 1 "Copied the twin" "Run this script without --overlay" "!npm install"
+: > "$STUB_DIR/calls.log"; app_run
+check "create-app, run again on an app without the SQL driver: adds it, and nothing else" 0 "Adding the SQL driver" "-w @rayfin-app/functions mssql@12.8.1" "already a dependency" "npm run typecheck (in windfarm-twin)" "!three@" "!create-rayfin"
+
 app_reset; echo "v20.19.0" > "$STUB_DIR/node_version"; app_run
-check "create-app, Node.js 20: stops before anything is created" 1 "Node.js 20.19.0 is too old" "!create-rayfin"
+check "create-app, Node.js 20: stops before anything is created" 1 "Node.js 20.19.0 is too old" "Step 2 of docs/11-deployment-guide-phase4.md" "!create-rayfin"
+
+app_reset; echo "v26.13.1" > "$STUB_DIR/node_version"; app_run
+check "create-app, Node.js 26 (what 'nvm install --lts' gives): says it is not on Rayfin's list, and goes on" 0 "Node.js 26.13.1 is not on that list" "nvm install 22" "create-rayfin@2.0.1"
+
+app_reset; echo "v24.11.0" > "$STUB_DIR/node_version"; app_run
+check "create-app, Node.js 24: no note" 0 "create-rayfin@2.0.1" "!not on that list"
+
+app_reset; app_run
+check "create-app, Node.js 22: no note" 0 "!not on that list" "!too old"
 
 app_reset; echo "10.9.9" > "$STUB_DIR/npm_version"; app_run
-check "create-app, npm 10: says what was seen with it, and goes on" 0 "edgesOut" "npm install -g npm@latest" "create-rayfin@2.0.1"
+check "create-app, npm 10: says what was seen with it, and goes on" 0 "edgesOut" "npm install -g npm@12" "create-rayfin@2.0.1"
 
 app_reset; touch "$STUB_DIR/scaffold_fails"; app_run
 check "create-app, the scaffolder creates nothing: stops and says so" 1 "ended without creating" "!pack:add"
@@ -364,5 +379,61 @@ check "create-app, unknown option: refuses" 1 "Unknown option --force" "!create-
 
 app_reset; app_run --overlay
 check "create-app --overlay without an app: says to run without the option" 1 "not a Rayfin project"
+
+# ---- app/create-principal.sh: the service principal for the Eventhouse route. az and npx are stand-ins
+# (stubs-principal); a copy of the script stands next to a pretend app, so nothing real is touched.
+chmod +x "$HERE"/stubs-principal/*
+PRDIR="$SCRATCH/principal"; PRINCIPAL="$PRDIR/create-principal.sh"
+pr_reset() { reset; rm -rf "$PRDIR"; mkdir -p "$PRDIR/windfarm-twin/rayfin"; echo "id: windfarm-twin" > "$PRDIR/windfarm-twin/rayfin/rayfin.yml"; cp "$REPO/app/create-principal.sh" "$PRINCIPAL"; }
+pr_run() { OUT="$(PATH="$HERE/stubs-principal:$PATH" bash "$PRINCIPAL" "$@" 2>&1)"; RC=$?; }
+pr_facts() { OUT="$OUT
+received:$(tr '\n' ' ' < "$STUB_DIR/secrets_received" 2>/dev/null) file:$([[ -e "$PRDIR/windfarm-twin/rayfin/.env.secrets" ]] && echo left || echo gone) role:$(grep -o '"role": "[A-Za-z]*"' "$STUB_DIR/roles.json" 2>/dev/null)"; }
+
+pr_reset; pr_run; pr_facts
+check "create-principal, first run: registration, principal, Viewer role, secret, three secrets to the app" 0 \
+  "Workspace WindFarmDigitalTwin is 638251b5" "ad app create --display-name windfarm-twin-eventhouse-reader" "ad sp create --id aaaaaaaa" \
+  '"type": "ServicePrincipal"}, "role": "Viewer"' "ad app credential reset" "npx rayfin secret set --env-file rayfin/.env.secrets (in windfarm-twin)" \
+  "received:KUSTO_TENANT_ID=11111111-2222-3333-4444-555555555555 KUSTO_CLIENT_ID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee KUSTO_CLIENT_SECRET=S3cr3t~made.by-the_stub" \
+  "file:gone" 'role:"role": "Viewer"' "npx rayfin up" ".add database WindFarmEH viewers ('aadapp=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee;11111111-2222-3333-4444-555555555555')"
+SHOWN="$(grep -v '^received:' <<< "$OUT")$(cat "$STUB_DIR/calls.log")"
+if grep -q 'S3cr3t' <<< "$SHOWN"; then fail=$((fail+1)); echo "FAIL create-principal: the secret appears in the output or in a command line"; else pass=$((pass+1)); echo "PASS create-principal: the secret is in neither the output nor a command line"; fi
+
+: > "$STUB_DIR/calls.log"; pr_run; pr_facts
+check "create-principal, run again: keeps the registration and the role, makes a new secret" 0 "keeping it" "It already has the role Viewer" "ad app credential reset" "npx rayfin secret set" "!ad app create" "!ad sp create" "!--method post" "file:gone"
+
+pr_reset; touch "$STUB_DIR/not_signed_in"; pr_run
+check "create-principal, not signed in to Azure: stops" 1 "Not signed in to Azure" "!ad app"
+
+pr_reset; touch "$STUB_DIR/no_workspace"; pr_run
+check "create-principal, the sign-in does not see the workspace: stops before anything is created" 1 "does not see a workspace named WindFarmDigitalTwin" "az login --tenant" "!ad app create"
+
+pr_reset; touch "$STUB_DIR/no_app_rights"; pr_run
+check "create-principal, the tenant does not allow app registrations: stops and names the Lakehouse" 1 "The app registration was not created" "Insufficient privileges" "stays on the Lakehouse" "!credential reset"
+
+pr_reset; touch "$STUB_DIR/role_refused"; pr_run
+check "create-principal, no right to give the role: stops before a secret is made, and says where to do it by hand" 1 "The role was not given" "Manage access" "!credential reset"
+
+pr_reset; touch "$STUB_DIR/no_secrets"; pr_run; pr_facts
+check "create-principal, the tenant forbids client secrets: stops, hands nothing to the app" 1 "No secret was made" "not allowed as per assigned policy" "!rayfin secret set" "file:gone"
+
+pr_reset; touch "$STUB_DIR/rayfin_signed_out"; pr_run; pr_facts
+check "create-principal, Rayfin not signed in: stops, says what to do, leaves no file with the secret" 1 "Rayfin did not take the secrets" "npx rayfin login" "file:gone"
+
+pr_reset; pr_run --show
+check "create-principal --show, nothing set up: says so and changes nothing" 0 "No app registration named windfarm-twin-eventhouse-reader" "!ad app create" "!--method post" "!credential"
+pr_run; : > "$STUB_DIR/calls.log"; pr_run --show
+check "create-principal --show, set up: registration, principal, role and the secrets of the app" 0 "application ID aaaaaaaa" "service principal 99999999" "Role on the workspace: Viewer" "KUSTO_CLIENT_SECRET" "!credential reset" "!--method post"
+
+: > "$STUB_DIR/calls.log"; pr_run --remove
+check "create-principal --remove: role, registration and the three secrets" 0 "--method delete --url https://api.fabric.microsoft.com/v1/workspaces/638251b5-0826-4632-b8f1-642e05d39629/roleAssignments/99999999" "ad app delete --id aaaaaaaa" "secret delete KUSTO_TENANT_ID" "secret delete KUSTO_CLIENT_ID" "secret delete KUSTO_CLIENT_SECRET" "reads the Lakehouse"
+
+pr_reset; rm -rf "$PRDIR/windfarm-twin"; pr_run
+check "create-principal, no app yet: says to create and deploy it first" 1 "There is no app in" "create-app.sh" "!ad app create"
+
+pr_reset; OUT="$(PATH="$HERE/stubs-principal:$PATH" SUDO_USER=sami bash "$PRINCIPAL" 2>&1)"; RC=$?
+check "create-principal with sudo: refuses" 1 "Do not run this with sudo" "!az account"
+
+pr_reset; pr_run --delete
+check "create-principal, unknown option: refuses" 1 "Unknown option --delete"
 
 echo; echo "passed $pass, failed $fail"; [[ $fail -eq 0 ]]

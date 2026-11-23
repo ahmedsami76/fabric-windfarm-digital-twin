@@ -151,9 +151,10 @@ The ontology **WindFarmOntology** has 10 entity types (site, turbine, component,
 
 A Fabric app built with Rayfin 2.0.1 ([11-deployment-guide-phase4.md](11-deployment-guide-phase4.md), [../app/README.md](../app/README.md)).
 
-- **The page** is React and Three.js, hosted by Fabric behind its sign-in. It draws the terrain from the same `heightmap.json` the simulator's site uses, the roads from the GIS layer and a turbine at each registry position, and it moves what the data moves: rotor speed, nacelle direction, blade pitch, state, gearbox condition.
-- **Four functions** run in Fabric as the identity of the app, which is its owner. `getLiveState` and `getTurbineTrend` query the KQL database; `askAgent` sends a question to the published data agent through its Model Context Protocol address; `getDiagnostics` tries each connection and reports. The page asks `getLiveState` every 5 seconds. No token reaches the browser.
-- **Nothing is configured.** The functions find the workspace, the KQL database and the data agent by name.
+- **The page** is React and Three.js, hosted by Fabric behind its sign-in. It draws the terrain from the same `heightmap.json` the simulator's site uses, the roads from the GIS layer and a turbine at each registry position, and it moves what the data moves: rotor speed, nacelle direction, blade pitch, state, gearbox condition. A turbine can be taken apart into the eleven components of `ref_components`; each shows its live values and takes its colour from the active alarms on that component.
+- **Seven functions** run in Fabric as the identity of the app, which is its owner. `askAgent` sends a question to the published data agent through its Model Context Protocol address. The live values have two routes, each with three functions of its own (values, trend, check). No token and no secret reaches the browser.
+- **A Fabric app cannot read the Eventhouse directly** (found at the first deployment, 23 November 2026): Fabric issues a token made for the Eventhouse only to an app with its own identity, and the Eventhouse refuses the token for the Fabric API. So the **Lakehouse route** reads the shortcut tables through the SQL analytics endpoint as the owner of the app, minutes behind, with nothing to set up; and the **Eventhouse route** reads the KQL database as a service principal whose secret is a secret of the app, seconds behind, after `app/create-principal.sh`. The page uses the Eventhouse route when it answers and the Lakehouse route otherwise, and its badge says which.
+- **Nothing but the principal is configured.** The functions find the workspace, the KQL database, the Lakehouse and the data agent by name.
 - The same page runs on a simulation built into it: with `?sample`, and as `app/preview/windfarm-twin-preview.html`.
 
 ## Design decisions
@@ -235,7 +236,7 @@ Three levels of evidence, kept apart on purpose.
 
 **Phase 3.** Deployed on 21 November 2026. [09-deployment-guide-phase3.md](09-deployment-guide-phase3.md) lists what ran with output seen, what was only reported, and what was checked without Fabric; [phase3-validation-log.md](phase3-validation-log.md) is the record.
 
-**Phase 4.** Built on 21 November 2026, not deployed yet. The page runs on sample data; the app compiles, builds and lints inside Microsoft's template; the functions pass their tests against stand-ins for Fabric. [11-deployment-guide-phase4.md](11-deployment-guide-phase4.md) lists what ran and what needs Fabric.
+**Phase 4.** Built on 21 November 2026, the exploded view on 22 November; not deployed yet. The page runs on sample data; the app compiles, builds and lints inside Microsoft's template; the functions pass their tests against stand-ins for Fabric. [11-deployment-guide-phase4.md](11-deployment-guide-phase4.md) lists what ran and what needs Fabric.
 
 **Not tested.** The upgrade of a running deployment as one sequence; `infra/rebuild-env.sh` against Azure; a successful `az iot ops delete` through the clean-up script; stopping and restarting the VM and the capacity; the checks added after the second run, against Azure; the just-in-time request of `vm.sh`. Not confirmed: the KQL added since the first run, in an Eventhouse.
 

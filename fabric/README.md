@@ -13,6 +13,8 @@ Run in this order. The deployment guide, steps 6 and 7, has the details.
 | 7 | `notebooks/03_refresh_forecast.ipynb` | Notebook, scheduled daily | Adds new day-ahead forecasts and replaces the latest forecast in `ops_power_forecast` |
 | 8 | `notebooks/04_question_bank.ipynb` | Notebook | Answers 39 questions of the site's staff from the Lakehouse |
 | any time | `kql/92-question-bank-live.kql` | KQL database | The four questions that are answered from live data |
+| any time | `kql/94-twin-app-queries.kql` | KQL database | The queries the twin of Phase 4 runs on its Eventhouse route |
+| any time | `sql/94-twin-app-queries.sql` | SQL analytics endpoint of the Lakehouse | The same questions in T-SQL, which the twin runs on its Lakehouse route |
 | as needed | `kql/91-repair-wizard-columns.kql` | KQL database | Removes the columns the Get data wizard adds when it is finished with its own mapping (see troubleshooting) |
 | as needed | `kql/99-reset-demo-data.kql` | KQL database | Empties all tables |
 

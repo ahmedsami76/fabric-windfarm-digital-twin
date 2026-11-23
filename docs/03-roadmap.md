@@ -7,7 +7,7 @@ Phase 1 is in this repository. The later phases are planned below, each with wha
 | 1. Edge to Eventhouse and Lakehouse | Edge VM, Azure IoT Operations, simulator with fault injection, eventstream, Eventhouse, Lakehouse, reference data, two years of operating history, forecast, question bank | Built. The edge-to-Fabric path was run live once; the history and the helper scripts added afterwards were tested without Azure and Fabric. |
 | 2. Prepare and model | Enriched tables and KQL views, semantic model | Delivered; deployed on 20 November 2026 |
 | 3. Ontology and agents | Data agent with a test, ontology, operations agent that detects the fault | Delivered; deployed on 21 November 2026 |
-| 4. Rayfin app | 3D digital twin with live data and chat | Built on 21 November 2026; not deployed yet |
+| 4. Rayfin app | 3D digital twin with live data and chat | Built on 21 November 2026; first deployed on 23 November 2026. The app runs; its two routes for the live values, built that night, have not run in Fabric yet |
 | 5. Remediation with approval | Operations agent proposes a fix, an engineer approves, the edge applies it | Planned |
 
 ## Phase 2: Prepare and model
@@ -65,22 +65,23 @@ Phase 1 is in this repository. The later phases are planned below, each with wha
 
 ## Phase 4: Rayfin app
 
-**Built on 21 November 2026; not deployed yet.** [11-deployment-guide-phase4.md](11-deployment-guide-phase4.md) is its guide, [phase4-validation-log.md](phase4-validation-log.md) the record, [../app/README.md](../app/README.md) the description of the code.
+**Built on 21 November 2026, the exploded view on 22 November; not deployed yet.** [11-deployment-guide-phase4.md](11-deployment-guide-phase4.md) is its guide, [phase4-validation-log.md](phase4-validation-log.md) the record, [../app/README.md](../app/README.md) the description of the code.
 
 **Delivers**
 
-- A Fabric app created with the Rayfin CLI 2.0.1 from Microsoft's Universal App template: a React and Three.js page hosted in the workspace behind the Fabric sign-in, and four functions.
+- A Fabric app created with the Rayfin CLI 2.0.1 from Microsoft's Universal App template: a React and Three.js page hosted in the workspace behind the Fabric sign-in, and seven functions.
 - The site in 3D: terrain from `reference/terrain/heightmap.json`, roads from the GIS layer, the substation, the met mast, and a turbine at each registry position. Rotors turn at the reported speed, nacelles face the reported direction, blades feather when a turbine stops, a ring on the ground carries the state, and the nacelle changes colour when the gearbox passes the thresholds of the operations agent.
-- Site figures, the list of turbines, a panel per turbine with live values and the trend of the last hour, the active alarms.
+- An exploded view of each turbine: the cover of the nacelle lifts off and the turbine comes apart into the eleven components of `ref_components`, each with its live values and a colour that follows the alarms of the turbine controller on that component.
+- Site figures, the list of turbines, a panel per turbine with live values and the trend of the last hour, the active alarms. With a turbine taken apart, the panel lists its components, and each row can put a question about that component to the data agent.
 - A chat that sends questions to the data agent of Phase 3.
 - A connection check inside the app, and the same twin on simulated values: in the app with `?sample`, and as one HTML file that needs nothing.
 
-**How the app reads live data: decided.** Functions that query the KQL database as the identity of the app. The alternatives of the earlier plan fell away: the semantic model is as old as its last refresh, and the Lakehouse shortcuts are about five minutes behind. Rayfin 2.0.1 has connector types for an Eventhouse and for a data agent, but holds both back; when they are released they can replace two of the functions.
+**How the app reads live data: decided twice.** The plan of 21 November was functions that query the KQL database as the identity of the app. The first deployment showed that a Fabric app gets no token the Eventhouse accepts. Since 23 November the app has two routes: the Lakehouse shortcuts through the SQL analytics endpoint, minutes behind and without set-up, and the KQL database as a service principal, seconds behind. Rayfin 2.0.1 has connector types for an Eventhouse and for a data agent, but holds both back; when they are released, or when an app can run as its own identity, the principal can go.
 
 **Not yet**
 
 - Deployed. Three things can only be found out there: what the deployment does with the token declared for the Eventhouse, which token the Eventhouse accepts, and whether the data agent answers live questions for the identity of an app. The connection check of the app reports all three.
-- A view of one turbine taken apart by component. The panel lists the component values instead.
+- A model of a real machine. The inside of the turbine is drawn from simple shapes at estimated sizes.
 - An answer that appears while the agent is still working: functions cannot stream.
 
 ## Phase 5: Remediation with approval

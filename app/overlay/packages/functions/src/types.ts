@@ -14,12 +14,24 @@ export type AppFunctionsSchema = {
     input: { turbineId: string; minutes: number };
     output: string;
   };
-  askAgent: {
-    input: { question: string };
-    output: string;
-  };
   getDiagnostics: {
     input: Record<string, never>;
+    output: string;
+  };
+  getLiveStateLakehouse: {
+    input: Record<string, never>;
+    output: string;
+  };
+  getTurbineTrendLakehouse: {
+    input: { turbineId: string; minutes: number };
+    output: string;
+  };
+  getDiagnosticsLakehouse: {
+    input: Record<string, never>;
+    output: string;
+  };
+  askAgent: {
+    input: { question: string };
     output: string;
   };
 };

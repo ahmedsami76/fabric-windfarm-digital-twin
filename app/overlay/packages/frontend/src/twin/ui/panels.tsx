@@ -4,11 +4,12 @@
  */
 import { useEffect, useState } from 'react';
 
+import { type PartKey, componentQuestion, componentStatus } from '../data/components';
 import type { Alarm, DiagnosticStep, LiveState, TrendPoint, TurbineLive } from '../data/contract';
 import type { TwinDataProvider } from '../data/provider';
-import { ALARM_VIBRATION, EARLY_OIL_TEMP, EARLY_VIBRATION, SITE, gearboxLevel } from '../data/site';
+import { ALARM_OIL_TEMP, ALARM_VIBRATION, EARLY_OIL_TEMP, EARLY_VIBRATION, SITE, WATCH_YAW_ERROR, gearboxLevel } from '../data/site';
 import { STATE_COLOR } from '../scene/turbine';
-import { clock, errorText, stateLabel } from './format';
+import { clock, errorText, stateLabel, unitLabel } from './format';
 
 const RATED = SITE.turbineModel.ratedPowerKw;
 
@@ -93,11 +94,45 @@ interface TurbinePanelProps {
   turbineId: string;
   alarms: Alarm[];
   provider: TwinDataProvider;
+  /** The turbine is shown taken apart; the panel then lists its components. */
+  exploded: boolean;
+  onExplode: (open: boolean) => void;
+  /** The component the pointer is on, in the scene or in the list. */
+  hotPart: PartKey | null;
+  onHotPart: (part: PartKey | null) => void;
   onClose: () => void;
   onAsk: (question: string) => void;
 }
 
-export function TurbinePanel({ turbine, turbineId, alarms, provider, onClose, onAsk }: TurbinePanelProps) {
+/** The components of the opened turbine: condition, name, live values, active alarms, and a question to the data agent. */
+function ComponentList({ turbine, turbineId, alarms, hotPart, onHotPart, onAsk }: { turbine: TurbineLive; turbineId: string; alarms: Alarm[]; hotPart: PartKey | null; onHotPart: (part: PartKey | null) => void; onAsk: (question: string) => void }) {
+  return (
+    <>
+      <ul className="twin-parts">
+        {componentStatus(turbine, alarms).map((c) => (
+          <li key={c.key} className={`level${c.level}${hotPart === c.key ? ' hot' : ''}`} onPointerEnter={() => onHotPart(c.key)} onPointerLeave={() => onHotPart(null)}>
+            <i className="dot" />
+            <div>
+              <b>{c.name}</b>
+              <span>{c.values.length > 0 ? c.values.join(' · ') : 'no live signal'}</span>
+              {c.alarms.length > 0 ? <em>{c.alarms.join(' · ')}</em> : null}
+            </div>
+            <button type="button" className="twin-icon" title={`Ask the data agent about the ${c.name.toLowerCase()} of ${turbineId}`} aria-label={`Ask the data agent about the ${c.name.toLowerCase()} of ${turbineId}`} onClick={() => onAsk(componentQuestion(turbineId, c))}>
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path d="M2.5 3h11a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8l-3.2 2.6V11H2.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="twin-note">
+        Green: no alarm. Amber: a value past a level worth watching (the early warning of the gearbox, a yaw error over {WATCH_YAW_ERROR.toFixed(0)}°). Red: an alarm of the turbine controller is active.
+      </p>
+    </>
+  );
+}
+
+export function TurbinePanel({ turbine, turbineId, alarms, provider, exploded, onExplode, hotPart, onHotPart, onClose, onAsk }: TurbinePanelProps) {
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [trendError, setTrendError] = useState<string | null>(null);
 
@@ -126,7 +161,7 @@ export function TurbinePanel({ turbine, turbineId, alarms, provider, onClose, on
   const spec = SITE.turbines.find((t) => t.id === turbineId);
   const t = turbine;
   const vibrationLevel = t ? (t.gearboxVibration >= ALARM_VIBRATION ? 2 : t.gearboxVibration >= EARLY_VIBRATION ? 1 : 0) : 0;
-  const oilLevel = t && t.gearboxOilTemp >= EARLY_OIL_TEMP ? 1 : 0;
+  const oilLevel = t ? (t.gearboxOilTemp >= ALARM_OIL_TEMP ? 2 : t.gearboxOilTemp >= EARLY_OIL_TEMP ? 1 : 0) : 0;
   return (
     <aside className="twin-panel twin-turbine" aria-label={`Turbine ${turbineId}`}>
       <header>
@@ -142,16 +177,25 @@ export function TurbinePanel({ turbine, turbineId, alarms, provider, onClose, on
         </button>
       </header>
       {t ? (
+        <div className="twin-power">
+          <b>{(t.activePower / 1000).toFixed(2)}</b>
+          <span>MW · {Math.round((t.activePower / RATED) * 100)}% of rated</span>
+        </div>
+      ) : null}
+      <button type="button" className={exploded ? 'twin-open on' : 'twin-open'} aria-pressed={exploded} onClick={() => onExplode(!exploded)}>
+        <svg viewBox="0 0 22 14" width="22" height="14" aria-hidden="true">
+          <path d="M1 4.5h4v5H1zM8 2.5h5.5v9H8zM16.5 4h4.5v6h-4.5z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+        </svg>
+        {exploded ? 'Put the turbine back together' : 'Exploded view: take the turbine apart'}
+      </button>
+      {t && exploded ? <ComponentList turbine={t} turbineId={turbineId} alarms={alarms} hotPart={hotPart} onHotPart={onHotPart} onAsk={onAsk} /> : null}
+      {t && !exploded ? (
         <>
-          <div className="twin-power">
-            <b>{(t.activePower / 1000).toFixed(2)}</b>
-            <span>MW · {Math.round((t.activePower / RATED) * 100)}% of rated</span>
-          </div>
           <div className="twin-tiles">
             <Tile label="Wind" value={t.windSpeed.toFixed(1)} unit="m/s" />
             <Tile label="Rotor" value={t.rotorSpeed.toFixed(1)} unit="rpm" />
             <Tile label="Pitch" value={t.pitchAngle.toFixed(1)} unit="°" />
-            <Tile label="Yaw error" value={t.yawError.toFixed(1)} unit="°" level={Math.abs(t.yawError) > 6 ? 1 : 0} />
+            <Tile label="Yaw error" value={t.yawError.toFixed(1)} unit="°" level={Math.abs(t.yawError) > WATCH_YAW_ERROR ? 1 : 0} />
             <Tile label="Gearbox vibration" value={t.gearboxVibration.toFixed(2)} unit="mm/s" level={vibrationLevel} />
             <Tile label="Gearbox oil" value={t.gearboxOilTemp.toFixed(1)} unit="°C" level={oilLevel} />
             <Tile label="Gearbox bearing" value={t.gearboxBearingTemp.toFixed(1)} unit="°C" />
@@ -166,9 +210,8 @@ export function TurbinePanel({ turbine, turbineId, alarms, provider, onClose, on
           <Sparkline values={trend.map((p) => p.gearboxVibration)} marks={[EARLY_VIBRATION, ALARM_VIBRATION]} unit="mm/s" color="#ffb224" />
           {trendError ? <p className="twin-error">Trend: {trendError}</p> : null}
         </>
-      ) : (
-        <p className="twin-empty">No telemetry from this turbine in the last 10 minutes.</p>
-      )}
+      ) : null}
+      {t ? null : <p className="twin-empty">No telemetry from this turbine in the last 10 minutes.</p>}
       {alarms.length > 0 ? (
         <ul className="twin-alarms inline">
           {alarms.map((a) => (
@@ -215,7 +258,7 @@ export function AlarmFeed({ alarms, onSelect }: { alarms: Alarm[]; onSelect: (id
                 <b>{a.turbineId}</b> {a.description}
                 <small>
                   {a.code} · since {clock(a.raisedAt)}
-                  {a.value !== null ? ` · ${a.value.toFixed(1)} ${a.unit}` : ''}
+                  {a.value !== null ? ` · ${a.value.toFixed(1)} ${unitLabel(a.unit)}` : ''}
                 </small>
               </button>
             </li>
@@ -248,11 +291,14 @@ export function Diagnostics({ provider, lastError, onClose }: { provider: TwinDa
     };
   }, [provider, attempt]);
 
+  const status = provider.routeStatus?.();
   const report = [
     `Wind farm twin, connection check, ${new Date().toISOString()}`,
     `Data source: ${provider.kind}`,
-    ...(steps ?? []).map((s) => `${s.ok ? 'PASS' : 'FAIL'}  ${s.step}: ${s.detail}`),
+    ...(status ? [`Live values come from: ${status.route === 'eventhouse' ? 'the Eventhouse (seconds old)' : status.route === 'lakehouse' ? 'the Lakehouse copy (minutes old)' : 'nowhere yet'}`] : []),
+    ...(steps ?? []).map((s) => `${s.skipped ? 'SKIP' : s.ok ? 'PASS' : 'FAIL'}  ${s.step}: ${s.detail}`),
     ...(failure ? [`FAIL  The check itself: ${failure}`] : []),
+    ...(status?.route === 'lakehouse' && status.eventhouseSaid ? [`The Eventhouse route last said: ${status.eventhouseSaid}`] : []),
     ...(lastError ? [`Last error of the live values: ${lastError}`] : []),
   ].join('\n');
 
@@ -265,7 +311,7 @@ export function Diagnostics({ provider, lastError, onClose }: { provider: TwinDa
             ×
           </button>
         </header>
-        <p className="twin-note">Each line is one thing the app needs from Fabric, tried now with the identity of the app.</p>
+        <p className="twin-note">Each line is one thing the app needs, tried now. The live values have two routes: the Eventhouse (seconds old, needs a service principal) and the copy in the Lakehouse (minutes old). One of them is enough.</p>
         <pre>{running ? 'Checking…' : report}</pre>
         <div className="twin-actions">
           <button type="button" onClick={() => setAttempt((a) => a + 1)} disabled={running}>

@@ -1,0 +1,190 @@
+{
+  "runtime": "TypeScript",
+  "functionsMetadata": [
+    {
+      "name": "getLiveState",
+      "scriptFile": "src/function_app.ts",
+      "bindings": [
+        {
+          "name": "req",
+          "type": "httpTrigger",
+          "direction": "in",
+          "authLevel": "anonymous",
+          "methods": [
+            "post"
+          ],
+          "route": "getLiveState"
+        },
+        {
+          "name": "$return",
+          "type": "http",
+          "direction": "out"
+        },
+        {
+          "name": "__generic_Fabric",
+          "direction": "in",
+          "type": "FabricItem",
+          "alias": "",
+          "audienceType": "Fabric"
+        }
+      ],
+      "fabricProperties": {
+        "fabricMetadataSchemaVersion": "1.0",
+        "fabricFunctionReturnType": "Promise<string>",
+        "fabricFunctionParameters": [
+          {
+            "name": "ctx",
+            "dataType": "RayfinContext<NoTables, AudienceType.Fabric>",
+            "hasDefaultValue": false
+          }
+        ]
+      },
+      "functionCode": "udf.func(\n  'getLiveState',\n  async (\n    ctx: RayfinContext<NoTables, AudienceType.Fabric>\n  ): Promise<string> => {\n    const access: Access = {\n      fabricToken: () => ctx.Tokens.Fabric,\n      kustoToken: () => { throw new Error('none: a custom audience needs an app with its own identity'); },\n      fetch,\n    };\n    return JSON.stringify(await getLiveState(access));\n  },\n  []\n)",
+      "capabilities": []
+    },
+    {
+      "name": "getTurbineTrend",
+      "scriptFile": "src/function_app.ts",
+      "bindings": [
+        {
+          "name": "req",
+          "type": "httpTrigger",
+          "direction": "in",
+          "authLevel": "anonymous",
+          "methods": [
+            "post"
+          ],
+          "route": "getTurbineTrend"
+        },
+        {
+          "name": "$return",
+          "type": "http",
+          "direction": "out"
+        },
+        {
+          "name": "__generic_Fabric",
+          "direction": "in",
+          "type": "FabricItem",
+          "alias": "",
+          "audienceType": "Fabric"
+        }
+      ],
+      "fabricProperties": {
+        "fabricMetadataSchemaVersion": "1.0",
+        "fabricFunctionReturnType": "Promise<string>",
+        "fabricFunctionParameters": [
+          {
+            "name": "turbineId",
+            "dataType": "string",
+            "hasDefaultValue": false
+          },
+          {
+            "name": "minutes",
+            "dataType": "number",
+            "hasDefaultValue": false
+          },
+          {
+            "name": "ctx",
+            "dataType": "RayfinContext<NoTables, AudienceType.Fabric>",
+            "hasDefaultValue": false
+          }
+        ]
+      },
+      "functionCode": "udf.func(\n  'getTurbineTrend',\n  async (\n    turbineId: string,\n    minutes: number,\n    ctx: RayfinContext<NoTables, AudienceType.Fabric>\n  ): Promise<string> => {\n    const access: Access = {\n      fabricToken: () => ctx.Tokens.Fabric,\n      kustoToken: () => { throw new Error('none: a custom audience needs an app with its own identity'); },\n      fetch,\n    };\n    return JSON.stringify(await getTurbineTrend(access, turbineId, minutes));\n  },\n  []\n)",
+      "capabilities": []
+    },
+    {
+      "name": "askAgent",
+      "scriptFile": "src/function_app.ts",
+      "bindings": [
+        {
+          "name": "req",
+          "type": "httpTrigger",
+          "direction": "in",
+          "authLevel": "anonymous",
+          "methods": [
+            "post"
+          ],
+          "route": "askAgent"
+        },
+        {
+          "name": "$return",
+          "type": "http",
+          "direction": "out"
+        },
+        {
+          "name": "__generic_Fabric",
+          "direction": "in",
+          "type": "FabricItem",
+          "alias": "",
+          "audienceType": "Fabric"
+        }
+      ],
+      "fabricProperties": {
+        "fabricMetadataSchemaVersion": "1.0",
+        "fabricFunctionReturnType": "Promise<string>",
+        "fabricFunctionParameters": [
+          {
+            "name": "question",
+            "dataType": "string",
+            "hasDefaultValue": false
+          },
+          {
+            "name": "ctx",
+            "dataType": "RayfinContext<NoTables, AudienceType.Fabric>",
+            "hasDefaultValue": false
+          }
+        ]
+      },
+      "functionCode": "udf.func(\n  'askAgent',\n  async (question: string, ctx: RayfinContext<NoTables, AudienceType.Fabric>): Promise<string> => {\n    const token = ctx.Tokens.Fabric;\n    const access: Access = {\n      fabricToken: () => token,\n      kustoToken: () => {\n        throw new Error('askAgent does not query the Eventhouse.');\n      },\n      fetch,\n    };\n    const found = await lookup(access);\n    if (!found.dataAgentEndpoint) {\n      throw new Error('No data agent named WindFarmDataAgent in the workspace. Build it with notebook 09 of Phase 3.');\n    }\n    return JSON.stringify(await askDataAgent(found.dataAgentEndpoint, token, question, fetch));\n  },\n  []\n)",
+      "capabilities": []
+    },
+    {
+      "name": "getDiagnostics",
+      "scriptFile": "src/function_app.ts",
+      "bindings": [
+        {
+          "name": "req",
+          "type": "httpTrigger",
+          "direction": "in",
+          "authLevel": "anonymous",
+          "methods": [
+            "post"
+          ],
+          "route": "getDiagnostics"
+        },
+        {
+          "name": "$return",
+          "type": "http",
+          "direction": "out"
+        },
+        {
+          "name": "__generic_Fabric",
+          "direction": "in",
+          "type": "FabricItem",
+          "alias": "",
+          "audienceType": "Fabric"
+        }
+      ],
+      "fabricProperties": {
+        "fabricMetadataSchemaVersion": "1.0",
+        "fabricFunctionReturnType": "Promise<string>",
+        "fabricFunctionParameters": [
+          {
+            "name": "ctx",
+            "dataType": "RayfinContext<NoTables, AudienceType.Fabric>",
+            "hasDefaultValue": false
+          }
+        ]
+      },
+      "functionCode": "udf.func(\n  'getDiagnostics',\n  async (\n    ctx: RayfinContext<NoTables, AudienceType.Fabric>\n  ): Promise<string> => {\n    const access: Access = {\n      fabricToken: () => ctx.Tokens.Fabric,\n      kustoToken: () => { throw new Error('none: a custom audience needs an app with its own identity'); },\n      fetch,\n    };\n    return JSON.stringify(await getDiagnostics(access));\n  },\n  []\n)",
+      "capabilities": []
+    }
+  ],
+  "packageVersions": {
+    "@microsoft/fabric-user-data-functions": "2.0.1"
+  },
+  "workerCapabilities": [
+    "secrets-endpoint"
+  ]
+}

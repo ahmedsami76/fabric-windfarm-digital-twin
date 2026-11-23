@@ -20,6 +20,9 @@ export const BLADE_LENGTH = MODEL.rotorDiameterM / 2 - 2;
  */
 export const TURBINE_SCALE = 1.8;
 
+/** The paint of tower, hub and blades. */
+export const WHITE = '#eef0f1';
+
 /** Colour of each state, used for the ring on the ground and the label. */
 export const STATE_COLOR: Record<TurbineState, string> = {
   RUNNING: '#3ddc97',
@@ -87,10 +90,23 @@ function geometries() {
 export interface TurbineView {
   id: string;
   group: THREE.Group;
+  tower: THREE.Mesh;
+  /** Turns the nacelle into the wind. Its origin is on the tower axis at hub height. */
   yaw: THREE.Group;
+  /** The cover of the nacelle. */
+  nacelle: THREE.Mesh;
+  /** Carries the rotor in front of the tower, leaning back. */
+  tilt: THREE.Group;
   rotor: THREE.Group;
+  hub: THREE.Mesh;
+  /** One per blade, turned to its place around the hub: +y of an arm points along its blade. */
+  arms: THREE.Group[];
   blades: THREE.Mesh[];
   nacelleMaterial: THREE.MeshStandardMaterial;
+  /** Tower, hub and blades each have a material of their own, so that each can take a colour. */
+  towerMaterial: THREE.MeshStandardMaterial;
+  hubMaterial: THREE.MeshStandardMaterial;
+  bladeMaterial: THREE.MeshStandardMaterial;
   ring: THREE.Mesh;
   halo: THREE.Mesh;
   ringMaterial: THREE.MeshBasicMaterial;
@@ -111,8 +127,11 @@ export function buildTurbine(id: string, base: THREE.Vector3, ringGeometry: THRE
   group.scale.setScalar(TURBINE_SCALE);
   group.name = id;
 
-  const white = new THREE.MeshStandardMaterial({ color: '#eef0f1', roughness: 0.48, metalness: 0.05 });
-  const tower = new THREE.Mesh(g.tower, white);
+  const white = (): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial({ color: WHITE, roughness: 0.48, metalness: 0.05 });
+  const towerMaterial = white();
+  const hubMaterial = white();
+  const bladeMaterial = white();
+  const tower = new THREE.Mesh(g.tower, towerMaterial);
   tower.castShadow = true;
   tower.receiveShadow = true;
   group.add(tower);
@@ -137,17 +156,19 @@ export function buildTurbine(id: string, base: THREE.Vector3, ringGeometry: THRE
   yaw.add(tilt);
   const rotor = new THREE.Group();
   tilt.add(rotor);
-  const hub = new THREE.Mesh(g.hub, white);
+  const hub = new THREE.Mesh(g.hub, hubMaterial);
   hub.castShadow = true;
   rotor.add(hub);
+  const arms: THREE.Group[] = [];
   const blades: THREE.Mesh[] = [];
   for (let b = 0; b < 3; b++) {
     const arm = new THREE.Group();
     arm.rotation.z = (b * 2 * Math.PI) / 3;
-    const blade = new THREE.Mesh(g.blade, white);
+    const blade = new THREE.Mesh(g.blade, bladeMaterial);
     blade.castShadow = true;
     arm.add(blade);
     rotor.add(arm);
+    arms.push(arm);
     blades.push(blade);
   }
 
@@ -163,7 +184,10 @@ export function buildTurbine(id: string, base: THREE.Vector3, ringGeometry: THRE
   proxy.userData.turbineId = id;
   group.add(proxy);
 
-  return { id, group, yaw, rotor, blades, nacelleMaterial, ring, halo, ringMaterial, haloMaterial, proxy, hubWorld: base.clone().add(new THREE.Vector3(0, HUB_HEIGHT * TURBINE_SCALE, 0)) };
+  return {
+    id, group, tower, yaw, nacelle, tilt, rotor, hub, arms, blades, nacelleMaterial, towerMaterial, hubMaterial, bladeMaterial,
+    ring, halo, ringMaterial, haloMaterial, proxy, hubWorld: base.clone().add(new THREE.Vector3(0, HUB_HEIGHT * TURBINE_SCALE, 0)),
+  };
 }
 
 /** Turn of the nacelle group, in radians, that points it at a compass direction (degrees from north). */

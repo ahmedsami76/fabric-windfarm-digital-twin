@@ -6,17 +6,43 @@
  * 12 rpm is one turn in five seconds), a nacelle faces its reported direction, blades feather when
  * the turbine stops, the ring on the ground carries the colour of the state, and the nacelle warms
  * in colour as the gearbox goes past its thresholds.
+ *
+ * A selected turbine can be opened (`setExploded`): the cover lifts off, the components of
+ * `exploded.ts` move apart, and each gets a label with its live values and the colour of its condition.
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+import { type ComponentStatus, PARTS, type PartKey, componentStatus } from '../data/components';
 import type { LiveState, TurbineLive, TurbineState } from '../data/contract';
 import { SITE, gearboxLevel } from '../data/site';
+import { type Exploded, buildExploded } from './exploded';
 import { VERTICAL_SCALE, buildGroundRing, buildRibbon, buildTerrain, heightAt, onGround, valueNoise } from './terrain';
 import { BLADE_LENGTH, HUB_HEIGHT, STATE_COLOR, TURBINE_SCALE, type TurbineView, buildTurbine, downwind, yawFor } from './turbine';
 
 export interface SceneCallbacks {
   onSelect: (turbineId: string | null) => void;
+  /** The pointer came over a component of the opened turbine (in the scene or on its label), or left it. */
+  onPart?: (part: PartKey | null) => void;
+}
+
+/** The turbine that is open, or on its way there or back. */
+interface Opened {
+  id: string;
+  view: TurbineView;
+  parts: Exploded;
+  /** 0 closed, 1 open: where the movement is, and where it is going. */
+  progress: number;
+  goal: 0 | 1;
+  /** Rotor angle when the opening began, and the angle it comes to rest at, with one blade upright. */
+  rotorFrom: number;
+  rotorRest: number;
+  /** Where the camera stood before, to go back to when the turbine is closed. */
+  cameFrom: { position: THREE.Vector3; target: THREE.Vector3 };
+  labels: Map<PartKey, HTMLButtonElement>;
+  leaders: Map<PartKey, { line: SVGLineElement; dot: SVGCircleElement }>;
+  sizes: Map<PartKey, { w: number; h: number }>;
+  status: Map<PartKey, ComponentStatus>;
 }
 
 interface Target {
@@ -42,6 +68,9 @@ const ZENITH = new THREE.Color('#2a6cc0');
 // lays the shadows of the towers across the ridge, towards the viewer.
 const SUN_DIRECTION = new THREE.Vector3(-0.78, 0.43, -0.34).normalize();
 const NACELLE_TINT = [new THREE.Color('#e9ecee'), new THREE.Color('#ffb224'), new THREE.Color('#ff4d5e')];
+const SVG = 'http://www.w3.org/2000/svg';
+const smooth = (u: number): number => u * u * (3 - 2 * u);
+const clamp01 = (u: number): number => Math.min(1, Math.max(0, u));
 const STREAKS = 260;
 const STREAK_AREA = 2300;
 
@@ -75,6 +104,13 @@ export class SceneEngine {
   private readonly labelNodes = new Map<string, HTMLButtonElement>();
   private readonly anchors = new Map<string, THREE.Vector3>();
   private readonly labelSizes = new Map<string, { w: number; h: number }>();
+  private readonly leaders: SVGSVGElement;
+  private readonly insides = new Map<string, Exploded>();
+  private opened: Opened | undefined;
+  /** The panels that lie over the scene, in its pixels. The labels of the components keep out of them. */
+  private panels: { left: number; right: number; top: number; bottom: number }[] = [];
+  private hotPart: PartKey | null = null;
+  private latest: LiveState | null = null;
   private readonly proxies: THREE.Object3D[] = [];
   private readonly streaks: THREE.LineSegments;
   private readonly streakSeeds: Float32Array;
@@ -91,6 +127,8 @@ export class SceneEngine {
   private readonly adaptive = !new URLSearchParams(window.location.search).has('fullquality');
   private frameTimes: number[] = [];
   private lastFrameAt = 0;
+  /** Pixels by which the picture is moved to the right of the middle of the page. */
+  private viewShift = 0;
   private selected: string | null = null;
   private hovered: string | null = null;
   private flight: Flight | undefined;
@@ -117,12 +155,15 @@ export class SceneEngine {
     this.labels = document.createElement('div');
     this.labels.className = 'twin-labels';
     container.appendChild(this.labels);
+    this.leaders = document.createElementNS(SVG, 'svg');
+    this.leaders.setAttribute('class', 'twin-leaders');
+    this.labels.appendChild(this.leaders);
 
     this.camera = new THREE.PerspectiveCamera(38, 1, 10, 90000);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 110;
+    this.controls.minDistance = 45;
     this.controls.maxDistance = 9500;
     this.controls.maxPolarAngle = Math.PI / 2 - 0.06;
     this.controls.zoomSpeed = 0.9;
@@ -158,6 +199,7 @@ export class SceneEngine {
 
   /** Apply a new set of live values. Turbines that are missing from it turn grey and stand still. */
   update(state: LiveState): void {
+    this.latest = state;
     const live = new Map<string, TurbineLive>(state.turbines.map((t) => [t.id, t]));
     for (const [id, view] of this.turbines) {
       const t = live.get(id);
@@ -190,6 +232,7 @@ export class SceneEngine {
       const n = state.turbines.length;
       this.wind = { speed: state.turbines.reduce((s, t) => s + t.windSpeed, 0) / n, direction: state.turbines[0].windDirection };
     }
+    if (this.opened) this.describeParts(this.opened);
   }
 
   /** Mark a turbine as selected and fly the camera to it. `null` clears the selection. */
@@ -199,16 +242,93 @@ export class SceneEngine {
     for (const [id, node] of this.labelNodes) node.classList.toggle('selected', id === turbineId);
     const view = turbineId ? this.turbines.get(turbineId) : undefined;
     if (!view || !fly) return;
-    const hub = view.hubWorld;
-    const away = this.camera.position.clone().sub(hub).setY(0);
-    if (away.lengthSq() < 1) away.set(0, 0, 1);
-    away.normalize();
-    const distance = 430 * TURBINE_SCALE;
-    // The panels cover the right and the bottom of the page: stand a little to the right of the line to
-    // the turbine and look below its hub, which puts it left of centre and clear of them.
-    const aside = new THREE.Vector3(away.z, 0, -away.x).multiplyScalar(distance * 0.17);
-    const position = hub.clone().add(away.multiplyScalar(distance)).add(new THREE.Vector3(0, 70, 0)).add(aside);
-    this.fly(position, hub.clone().add(new THREE.Vector3(0, -62 * TURBINE_SCALE, 0)).add(aside));
+    const pose = this.selectPose(view);
+    this.fly(pose.position, pose.target);
+  }
+
+  /**
+   * Open a turbine into its components and fly to it, or close the one that is open (`null`). The
+   * turbine is opened where it stands, with the values it has: nothing about it is stopped but its rotor.
+   */
+  setExploded(turbineId: string | null): void {
+    const current = this.opened;
+    if (turbineId === null) {
+      if (!current || current.goal === 0) return;
+      current.goal = 0;
+      current.rotorFrom = current.rotorRest; // it starts turning again from where it rests
+      this.setHot(null);
+      if (this.selected === current.id) this.fly(current.cameFrom.position, current.cameFrom.target);
+      return;
+    }
+    if (current?.id === turbineId) {
+      if (current.goal === 1) return;
+      current.goal = 1;
+      const pose = this.openedPose(current);
+      this.fly(pose.position, pose.target);
+      return;
+    }
+    if (current) this.close(current); // one turbine at a time: the other goes back together at once
+    const view = this.turbines.get(turbineId);
+    if (!view) return;
+    let parts = this.insides.get(turbineId);
+    if (!parts) {
+      parts = buildExploded(view);
+      this.insides.set(turbineId, parts);
+    }
+    for (const object of parts.added) object.visible = true;
+    // The rotor comes to rest at the next angle, the way it turns, at which a blade stands upright.
+    const third = (Math.PI * 2) / 3;
+    const rotorFrom = view.rotor.rotation.z;
+    const rotorRest = Math.floor(rotorFrom / third) * third;
+    parts.setUpright(Math.round(-rotorRest / third));
+    // If the camera is still on its way to the turbine, the place to go back to is where it was going.
+    const cameFrom = this.flight
+      ? { position: this.flight.toPosition.clone(), target: this.flight.toTarget.clone() }
+      : { position: this.camera.position.clone(), target: this.controls.target.clone() };
+    const opened: Opened = { id: turbineId, view, parts, progress: 0, goal: 1, rotorFrom, rotorRest, cameFrom, labels: new Map(), leaders: new Map(), sizes: new Map(), status: new Map() };
+    for (const part of PARTS) {
+      const node = document.createElement('button');
+      node.type = 'button';
+      node.className = 'twin-part';
+      node.tabIndex = -1;
+      node.dataset.part = part.key;
+      node.dataset.level = '0';
+      node.append(document.createElement('b'), document.createElement('span'));
+      node.addEventListener('pointerenter', () => this.setHot(part.key));
+      node.addEventListener('pointerleave', () => this.setHot(null));
+      this.labels.appendChild(node);
+      opened.labels.set(part.key, node);
+      const line = document.createElementNS(SVG, 'line');
+      const dot = document.createElementNS(SVG, 'circle');
+      dot.setAttribute('r', '3');
+      this.leaders.append(line, dot);
+      opened.leaders.set(part.key, { line, dot });
+    }
+    this.opened = opened;
+    this.labels.classList.add('parts-open');
+    this.describeParts(opened);
+    const pose = this.openedPose(opened);
+    this.fly(pose.position, pose.target, 1.9);
+  }
+
+  /** Fit the opened turbine to the page again, after a panel has been opened or closed. */
+  reframe(): void {
+    const opened = this.opened;
+    this.readPanels();
+    if (!opened || opened.goal === 0 || opened.progress < 1) return;
+    const pose = this.openedPose(opened);
+    this.fly(pose.position, pose.target, 1.0);
+  }
+
+  /** Mark a component of the opened turbine, as the pointer over it would. For the list in the panel. */
+  highlightPart(part: PartKey | null): void {
+    this.hotPart = this.opened ? part : null;
+    for (const [key, node] of this.opened?.labels ?? []) node.classList.toggle('hot', key === this.hotPart);
+  }
+
+  /** The turbine that is open or opening, for the tests and the console. */
+  get openedTurbine(): string | null {
+    return this.opened && this.opened.goal === 1 ? this.opened.id : null;
   }
 
   /** Fly back to the view of the whole site. */
@@ -220,6 +340,7 @@ export class SceneEngine {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.opened) this.close(this.opened);
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     const canvas = this.renderer.domElement;
@@ -240,6 +361,88 @@ export class SceneEngine {
   }
 
   // ---------------------------------------------------------------- building
+
+  /** Where the camera stands to look at one turbine as a whole. */
+  private selectPose(view: TurbineView): { position: THREE.Vector3; target: THREE.Vector3 } {
+    const hub = view.hubWorld;
+    const away = this.camera.position.clone().sub(hub).setY(0);
+    if (away.lengthSq() < 1) away.set(0, 0, 1);
+    away.normalize();
+    const distance = 430 * TURBINE_SCALE;
+    // The panels cover the right and the bottom of the page: stand a little to the right of the line to
+    // the turbine and look below its hub, which puts it left of centre and clear of them.
+    const aside = new THREE.Vector3(away.z, 0, -away.x).multiplyScalar(distance * 0.17);
+    const position = hub.clone().add(away.multiplyScalar(distance)).add(new THREE.Vector3(0, 70, 0)).add(aside);
+    return { position, target: hub.clone().add(new THREE.Vector3(0, -62 * TURBINE_SCALE, 0)).add(aside) };
+  }
+
+  /** The part of the page that no panel covers, in pixels of the scene. */
+  private freeArea(): { left: number; top: number; width: number; height: number } {
+    const host = this.container.getBoundingClientRect();
+    const root = this.container.parentElement;
+    const panel = (selector: string): DOMRect | null => {
+      const rect = root?.querySelector(selector)?.getBoundingClientRect();
+      return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+    };
+    let left = 0;
+    let top = 0;
+    let right = host.width;
+    let bottom = host.height;
+    const bar = panel('.twin-top');
+    if (bar) top = bar.bottom - host.top;
+    const fleet = panel('.twin-fleet');
+    if (fleet) left = fleet.right - host.left;
+    const turbine = panel('.twin-turbine');
+    if (turbine) right = turbine.left - host.left;
+    for (const below of [panel('.twin-chat'), panel('.twin-alarmfeed')]) {
+      if (below && below.top - host.top > top + 200) bottom = Math.min(bottom, below.top - host.top);
+    }
+    // On a small window the panels leave nothing: then the scene takes the page and lies under them.
+    if (right - left < 420) [left, right] = [0, host.width];
+    if (bottom - top < 300) bottom = host.height;
+    return { left: left + 10, top: top + 8, width: right - left - 20, height: bottom - top - 16 };
+  }
+
+  /**
+   * Where the camera stands to look at the opened turbine: beside the nacelle, on the side it is on
+   * already, a little to the back and a little above, at the distance at which the parts and their
+   * labels fill the part of the page the panels leave free. From behind, the drivetrain is the near
+   * thing and the rotor with its long blades the far one.
+   */
+  private openedPose(opened: Opened): { position: THREE.Vector3; target: THREE.Vector3 } {
+    const yaw = opened.view.yaw.rotation.y;
+    const origin = opened.view.hubWorld;
+    const beside = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    const front = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    const side = this.camera.position.clone().sub(origin).dot(beside) < 0 ? -1 : 1;
+    const azimuth = THREE.MathUtils.degToRad(-16);
+    const elevation = THREE.MathUtils.degToRad(13);
+    const back = beside.clone().multiplyScalar(side * Math.cos(elevation) * Math.cos(azimuth)).addScaledVector(front, Math.cos(elevation) * Math.sin(azimuth));
+    back.y = Math.sin(elevation);
+    back.normalize();
+    const right = new THREE.Vector3(0, 1, 0).cross(back).normalize();
+    const up = back.clone().cross(right);
+
+    const box = opened.parts.bounds;
+    const free = this.freeArea();
+    const wide = (box.zMax - box.zMin) * Math.abs(right.dot(front)) + 4 * Math.abs(right.dot(beside));
+    const high = (box.yMax - box.yMin) * up.y + 4 * Math.abs(up.dot(beside));
+    // Labels stand beyond the parts: about 95 pixels on the side of the rotor, 65 at the back, 80 below.
+    const perMetre = THREE.MathUtils.clamp(Math.min((free.width - 184) / wide, (free.height - 114) / high), 9, 46);
+    const perWorldMetre = perMetre / TURBINE_SCALE;
+    const distance = this.container.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * perWorldMetre);
+    const centre = origin
+      .clone()
+      .addScaledVector(front, ((box.zMin + box.zMax) / 2) * TURBINE_SCALE)
+      .add(new THREE.Vector3(0, ((box.yMin + box.yMax) / 2) * TURBINE_SCALE, 0));
+    // Where the middle of the parts is to appear, and where the axis of the camera meets the page.
+    const wantX = free.left + free.width / 2 + (right.dot(front) > 0 ? -15 : 15);
+    const wantY = free.top + free.height / 2 - 33;
+    const axisX = this.container.clientWidth / 2 + this.viewShift;
+    const axisY = this.container.clientHeight / 2;
+    const target = centre.addScaledVector(right, (axisX - wantX) / perWorldMetre).addScaledVector(up, (wantY - axisY) / perWorldMetre);
+    return { position: target.clone().addScaledVector(back, distance), target };
+  }
 
   private overviewPose(): { position: THREE.Vector3; target: THREE.Vector3 } {
     // From the south-west, along the ridge: the rotors face this way when the wind is the prevailing one.
@@ -489,8 +692,8 @@ export class SceneEngine {
 
   // ---------------------------------------------------------------- running
 
-  private fly(position: THREE.Vector3, target: THREE.Vector3): void {
-    this.flight = { fromPosition: this.camera.position.clone(), toPosition: position, fromTarget: this.controls.target.clone(), toTarget: target, elapsed: 0, duration: 1.5 };
+  private fly(position: THREE.Vector3, target: THREE.Vector3, duration = 1.5): void {
+    this.flight = { fromPosition: this.camera.position.clone(), toPosition: position, fromTarget: this.controls.target.clone(), toTarget: target, elapsed: 0, duration };
   }
 
   private resize(): void {
@@ -499,7 +702,9 @@ export class SceneEngine {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     // The fleet list covers the left edge: move the picture a little to the right of centre.
-    if (width > 900) this.camera.setViewOffset(width, height, -Math.min(110, width * 0.07), 0, width, height);
+    if (this.opened) this.readPanels();
+    this.viewShift = width > 900 ? Math.min(110, width * 0.07) : 0;
+    if (this.viewShift > 0) this.camera.setViewOffset(width, height, -this.viewShift, 0, width, height);
     else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
   }
@@ -528,11 +733,16 @@ export class SceneEngine {
       const target = this.targets.get(id);
       if (!target) continue;
       const data = view.rotor.userData as { rpm?: number };
-      data.rpm = (data.rpm ?? 0) + (target.rpm - (data.rpm ?? 0)) * (1 - Math.exp(-dt * 0.9));
-      view.rotor.rotation.z -= ((data.rpm * Math.PI * 2) / 60) * dt;
+      if (this.opened?.id === id) {
+        data.rpm = 0; // the rotor of an opened turbine is held; closed again, it runs up from standstill
+      } else {
+        data.rpm = (data.rpm ?? 0) + (target.rpm - (data.rpm ?? 0)) * (1 - Math.exp(-dt * 0.9));
+        view.rotor.rotation.z -= ((data.rpm * Math.PI * 2) / 60) * dt;
+      }
       view.yaw.rotation.y += shortestTurn(view.yaw.rotation.y, target.yaw) * (1 - Math.exp(-dt * 0.7));
       for (const blade of view.blades) blade.rotation.y += (target.pitch - blade.rotation.y) * (1 - Math.exp(-dt * 1.2));
-      view.nacelleMaterial.color.lerp(NACELLE_TINT[target.level], 1 - Math.exp(-dt * 2));
+      // The cover of an opened turbine is glass, and the gearbox under it carries the colour itself.
+      view.nacelleMaterial.color.lerp(NACELLE_TINT[this.opened?.id === id && this.opened.goal === 1 ? 0 : target.level], 1 - Math.exp(-dt * 2));
 
       const isSelected = id === this.selected;
       const emphasis = isSelected || id === this.hovered;
@@ -542,12 +752,197 @@ export class SceneEngine {
       view.haloMaterial.opacity = fault ? 0.1 + 0.4 * pulse : isSelected ? 0.38 : target.state === 'DERATED' || target.level > 0 ? 0.24 : emphasis ? 0.18 : 0;
     }
 
+    if (this.opened) this.moveParts(this.opened, dt, time);
     this.moveStreaks(dt);
     this.renderer.render(this.scene, this.camera);
-    this.placeLabels();
+    if (!this.opened || this.opened.progress < 0.6) this.placeLabels();
+    if (this.opened) this.placeParts(this.opened);
     if (this.frame++ === 1) this.resolveReady();
     this.watchFrameTime();
   };
+
+  // ---------------------------------------------------------------- the opened turbine
+
+  /** Where the panels are now. Read when the values or the page change, which is when a panel can change, not with every frame. */
+  private readPanels(): void {
+    const host = this.container.getBoundingClientRect();
+    const nodes = this.container.parentElement?.querySelectorAll('.twin-panel, .twin-chat-toggle') ?? [];
+    this.panels = [...nodes]
+      .map((node) => node.getBoundingClientRect())
+      .filter((r) => r.width > 0 && r.height > 0)
+      .map((r) => ({ left: r.left - host.left - 5, right: r.right - host.left + 5, top: r.top - host.top - 5, bottom: r.bottom - host.top + 5 }));
+  }
+
+  /** Write the live values of each component on its label and note its condition. */
+  private describeParts(opened: Opened): void {
+    this.readPanels();
+    const turbine = this.latest?.turbines.find((t) => t.id === opened.id);
+    const status = turbine ? componentStatus(turbine, this.latest?.alarms ?? []) : [];
+    opened.status = new Map(status.map((s) => [s.key, s]));
+    for (const part of PARTS) {
+      const node = opened.labels.get(part.key);
+      if (!node) continue;
+      const now = opened.status.get(part.key);
+      const text = now ? now.values.slice(0, 2).join(' · ') : 'no data';
+      const [name, values] = [node.children[0] as HTMLElement, node.children[1] as HTMLElement];
+      if (name.textContent !== part.name || values.textContent !== text) {
+        name.textContent = part.name;
+        values.textContent = text;
+        values.style.display = text ? '' : 'none';
+        opened.sizes.delete(part.key); // the text may have a new width
+      }
+      node.dataset.level = String(now?.level ?? 0);
+      const leader = opened.leaders.get(part.key);
+      leader?.line.setAttribute('data-level', node.dataset.level);
+      leader?.dot.setAttribute('data-level', node.dataset.level);
+    }
+  }
+
+  /** One step of the opening or closing: positions, the cover, the rotor and the colours of the conditions. */
+  private moveParts(opened: Opened, dt: number, time: number): void {
+    opened.progress = clamp01(opened.progress + (opened.goal === 1 ? dt / 1.8 : -dt / 1.1));
+    const { view, parts, progress } = opened;
+    for (const m of parts.movers) m.object.position.copy(m.home).addScaledVector(m.travel, smooth(clamp01(progress * 1.35 - m.delay)));
+
+    // The cover turns to glass as it lifts.
+    const glass = smooth(clamp01(progress * 1.7));
+    this.seeThrough(view.nacelleMaterial, progress > 0);
+    view.nacelleMaterial.opacity = 1 - 0.74 * glass;
+    view.nacelleMaterial.depthWrite = glass < 0.5;
+    view.rotor.rotation.z = THREE.MathUtils.lerp(opened.rotorFrom, opened.rotorRest, smooth(clamp01(progress * 1.5)));
+
+    const pulse = 0.5 + 0.5 * Math.sin(time * 7.5);
+    const ease = 1 - Math.exp(-dt * 6);
+    for (const [key, part] of parts.parts) {
+      const level = opened.goal === 1 ? (opened.status.get(key)?.level ?? 0) : 0;
+      const hot = key === this.hotPart;
+      for (const { material, base } of part.tint) {
+        const color = level === 0 ? base : NACELLE_TINT[level];
+        material.color.lerp(color, ease);
+        // A little light of their own keeps the parts readable on the side away from the sun.
+        const glow = (level === 2 ? 0.3 + 0.25 * pulse : level === 1 ? 0.24 : 0.07) + (hot ? 0.2 : 0);
+        material.emissive.copy(material.color).multiplyScalar(glow * smooth(progress));
+      }
+    }
+    this.labels.classList.toggle('parts-shown', opened.goal === 1 && progress > 0.8);
+    if (progress === 0 && opened.goal === 0) this.close(opened);
+  }
+
+  /** Put the turbine back together at once and take its labels away. */
+  private close(opened: Opened): void {
+    const { view, parts } = opened;
+    for (const m of parts.movers) m.object.position.copy(m.home);
+    for (const object of parts.added) object.visible = false;
+    this.seeThrough(view.nacelleMaterial, false);
+    view.nacelleMaterial.opacity = 1;
+    view.nacelleMaterial.depthWrite = true;
+    for (const part of parts.parts.values()) {
+      for (const { material, base } of part.tint) {
+        material.color.copy(base);
+        material.emissive.setScalar(0);
+      }
+    }
+    for (const node of opened.labels.values()) node.remove();
+    for (const { line, dot } of opened.leaders.values()) {
+      line.remove();
+      dot.remove();
+    }
+    this.labels.classList.remove('parts-open', 'parts-shown');
+    if (this.opened === opened) this.opened = undefined;
+    this.setHot(null);
+  }
+
+  /** Whether a material is drawn with its opacity. The shader is built for one or the other, so a change rebuilds it. */
+  private seeThrough(material: THREE.Material, on: boolean): void {
+    if (material.transparent === on) return;
+    material.transparent = on;
+    material.needsUpdate = true;
+  }
+
+  private setHot(part: PartKey | null): void {
+    if (part === this.hotPart) return;
+    this.highlightPart(part);
+    this.callbacks.onPart?.(this.hotPart);
+  }
+
+  /** Put the label of each component beside it, with a line to it. */
+  private placeParts(opened: Opened): void {
+    if (opened.progress < 0.6) return;
+    const width = this.container.clientWidth;
+    const height = this.container.clientHeight;
+    const toPage = (world: THREE.Vector3): { x: number; y: number; ahead: boolean } => {
+      const v = world.clone().project(this.camera);
+      return { x: (v.x * 0.5 + 0.5) * width, y: (-v.y * 0.5 + 0.5) * height, ahead: v.z > -1 && v.z < 1 };
+    };
+    // On the page: which way the rotor lies, and how many pixels a metre of the turbine takes.
+    const origin = opened.view.yaw.getWorldPosition(new THREE.Vector3());
+    const yaw = opened.view.yaw.rotation.y;
+    const at = toPage(origin);
+    const ahead = toPage(origin.clone().add(new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).multiplyScalar(TURBINE_SCALE)));
+    const above = toPage(origin.clone().addScaledVector(this.camera.up.clone().applyQuaternion(this.camera.quaternion), TURBINE_SCALE));
+    const rotorSide = ahead.x < at.x ? -1 : 1;
+    const perMetre = Math.hypot(above.x - at.x, above.y - at.y);
+
+    const placed: { left: number; right: number; top: number; bottom: number }[] = [];
+    const world = new THREE.Vector3();
+    for (const part of PARTS) {
+      const view = opened.parts.parts.get(part.key);
+      const node = opened.labels.get(part.key);
+      const leader = opened.leaders.get(part.key);
+      if (!view || !node || !leader) continue;
+      const anchor = toPage(view.anchor.getWorldPosition(world));
+      const seen = anchor.ahead && anchor.x > -40 && anchor.x < width + 40 && anchor.y > -40 && anchor.y < height + 40;
+      node.style.display = seen ? '' : 'none';
+      leader.line.style.display = seen ? '' : 'none';
+      leader.dot.style.display = seen ? '' : 'none';
+      if (!seen) continue;
+      let size = opened.sizes.get(part.key);
+      if (!size) {
+        size = { w: node.offsetWidth, h: node.offsetHeight };
+        opened.sizes.set(part.key, size);
+      }
+      // The label keeps clear of the part by its own half size, whatever the zoom.
+      const { along, up } = view.label;
+      let x = anchor.x + rotorSide * (along * perMetre + Math.sign(along) * (size.w / 2));
+      let y = anchor.y - (up * perMetre + Math.sign(up) * (size.h / 2));
+      x = Math.min(width - size.w / 2 - 6, Math.max(size.w / 2 + 6, x));
+      y = Math.min(height - size.h / 2 - 6, Math.max(size.h / 2 + 6, y));
+      // A label that would lie under a panel comes back towards its part, by the shortest way out.
+      let step = up < 0 || (up === 0 && anchor.y > at.y) ? 1 : -1;
+      for (const panel of this.panels) {
+        if (x - size.w / 2 >= panel.right || x + size.w / 2 <= panel.left || y - size.h / 2 >= panel.bottom || y + size.h / 2 <= panel.top) continue;
+        const ways = [
+          { dx: 0, dy: panel.top - (y + size.h / 2), open: anchor.y < panel.top },
+          { dx: 0, dy: panel.bottom - (y - size.h / 2), open: anchor.y > panel.bottom },
+          { dx: panel.left - (x + size.w / 2), dy: 0, open: anchor.x < panel.left },
+          { dx: panel.right - (x - size.w / 2), dy: 0, open: anchor.x > panel.right },
+        ].filter((way) => way.open);
+        if (ways.length === 0) continue; // the part itself lies under the panel
+        const way = ways.reduce((a, b) => (Math.abs(a.dx) + Math.abs(a.dy) <= Math.abs(b.dx) + Math.abs(b.dy) ? a : b));
+        x += way.dx;
+        y += way.dy;
+        if (way.dy !== 0) step = way.dy < 0 ? -1 : 1;
+      }
+      // A label that would cover one already placed moves on, away from the drivetrain.
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const hit = placed.find((r) => x - size.w / 2 < r.right && x + size.w / 2 > r.left && y - size.h / 2 < r.bottom && y + size.h / 2 > r.top);
+        if (!hit) break;
+        y = step > 0 ? hit.bottom + size.h / 2 + 4 : hit.top - size.h / 2 - 4;
+      }
+      const box = { left: x - size.w / 2, right: x + size.w / 2, top: y - size.h / 2, bottom: y + size.h / 2 };
+      placed.push(box);
+      node.style.transform = `translate(${box.left.toFixed(1)}px, ${box.top.toFixed(1)}px)`;
+      // The line runs from the part to the nearest point of the label.
+      const endX = Math.min(box.right, Math.max(box.left, anchor.x));
+      const endY = Math.min(box.bottom, Math.max(box.top, anchor.y));
+      leader.line.setAttribute('x1', anchor.x.toFixed(1));
+      leader.line.setAttribute('y1', anchor.y.toFixed(1));
+      leader.line.setAttribute('x2', endX.toFixed(1));
+      leader.line.setAttribute('y2', endY.toFixed(1));
+      leader.dot.setAttribute('cx', anchor.x.toFixed(1));
+      leader.dot.setAttribute('cy', anchor.y.toFixed(1));
+    }
+  }
 
   /** The quality level in use, for the console and the tests. */
   get qualityLevel(): number {
@@ -678,8 +1073,22 @@ export class SceneEngine {
   private readonly onPointerMove = (event: PointerEvent): void => {
     if (this.pointerDown) return;
     this.hovered = this.pick(event);
-    this.renderer.domElement.style.cursor = this.hovered ? 'pointer' : 'grab';
+    const part = this.pickPart(event);
+    this.setHot(part);
+    this.renderer.domElement.style.cursor = this.hovered || part ? 'pointer' : 'grab';
   };
+
+  /** The component of the opened turbine under the pointer. */
+  private pickPart(event: PointerEvent): PartKey | null {
+    const opened = this.opened;
+    if (!opened || opened.goal === 0 || opened.progress < 0.9) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const point = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(point, this.camera);
+    const meshes = [...opened.parts.parts.values()].flatMap((p) => p.meshes);
+    const hit = this.raycaster.intersectObjects(meshes, false)[0];
+    return hit ? (hit.object.userData.part as PartKey) : null;
+  }
 }
 
 /** Heights the labels and the detail camera use, exported for the tests. */

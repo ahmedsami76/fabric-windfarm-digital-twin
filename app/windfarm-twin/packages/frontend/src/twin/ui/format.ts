@@ -8,3 +8,6 @@ export const clock = (iso: string): string => {
 };
 
 export const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** A unit as the alarm data writes it, as it is read: `degC` is °C and `deg` is °. */
+export const unitLabel = (unit: string): string => (unit === 'degC' ? '°C' : unit === 'deg' ? '°' : unit);

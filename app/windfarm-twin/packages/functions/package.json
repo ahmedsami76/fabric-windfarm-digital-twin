@@ -17,9 +17,11 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "@microsoft/fabric-user-data-functions": "^2.0.1"
+    "@microsoft/fabric-user-data-functions": "^2.0.1",
+    "mssql": "^12.8.1"
   },
   "devDependencies": {
+    "@types/mssql": "^12.3.0",
     "@types/node": "^24.0.0",
     "rimraf": "^6.0.0",
     "typescript": "~6.0.2"

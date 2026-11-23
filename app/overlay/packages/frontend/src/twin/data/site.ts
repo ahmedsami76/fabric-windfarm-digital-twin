@@ -52,12 +52,21 @@ export interface Site {
 export const SITE = JSON.parse(SITE_DATA_JSON) as Site;
 
 /**
- * Thresholds on the gearbox signals. They are the ones the operations agent of Phase 3 watches
- * (`tools/agent_spec.py`): an early warning at 4.0 mm/s and 72 °C, the controller's alarm at 5.5 mm/s.
+ * Thresholds on the gearbox signals. The early warning at 4.0 mm/s and 72 °C is the one the operations
+ * agent of Phase 3 watches (`tools/agent_spec.py`). The alarm levels, 5.5 mm/s and 78 °C, are those at
+ * which the turbine controller raises its first alarm on each signal (`data/reference/alarm_codes.csv`).
  */
 export const EARLY_VIBRATION = 4.0;
 export const ALARM_VIBRATION = 5.5;
 export const EARLY_OIL_TEMP = 72.0;
+export const ALARM_OIL_TEMP = 78.0;
+
+/**
+ * Yaw error, in degrees either way, from which the twin marks the yaw system. This one is the twin's
+ * own: the turbine controller has no alarm on the yaw error, and a nacelle that stands this far off
+ * the wind for long is what a miscalibrated wind vane looks like.
+ */
+export const WATCH_YAW_ERROR = 6.0;
 
 /** Elevation in metres above sea level at a position, by bilinear interpolation of the grid. */
 export function groundAt(x: number, y: number): number {
@@ -83,9 +92,9 @@ export function powerCurve(windSpeed: number): number {
   return m.ratedPowerKw * share;
 }
 
-/** How serious the gearbox of a turbine looks: 0 healthy, 1 early warning, 2 at the alarm level. */
+/** How serious the gearbox of a turbine looks: 0 healthy, 1 early warning, 2 at the level of an alarm. */
 export function gearboxLevel(vibration: number, oilTemp: number): 0 | 1 | 2 {
-  if (vibration >= ALARM_VIBRATION) return 2;
+  if (vibration >= ALARM_VIBRATION || oilTemp >= ALARM_OIL_TEMP) return 2;
   if (vibration >= EARLY_VIBRATION || oilTemp >= EARLY_OIL_TEMP) return 1;
   return 0;
 }

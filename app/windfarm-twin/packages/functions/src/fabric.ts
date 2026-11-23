@@ -7,15 +7,23 @@ import {
   FABRIC_API,
   FABRIC_TIMEOUT_MS,
   KQL_DATABASE_NAME,
+  LAKEHOUSE_NAME,
   LOOKUP_TTL_MS,
   WORKSPACE_NAME,
 } from './config.js';
 
-/** What a function needs from its context. Reading a token throws when the host supplied none. */
+/** What a function needs from its context. Reading the token throws when the host supplied none. */
 export interface Access {
   fabricToken: () => string;
-  kustoToken: () => string;
   fetch: typeof fetch;
+}
+
+/** Where the Lakehouse answers SQL: the server of its SQL analytics endpoint, and its item identifier. */
+export interface LakehouseLookup {
+  workspaceId: string;
+  lakehouseId: string;
+  lakehouseName: string;
+  sqlServer: string;
 }
 
 export interface Lookup {
@@ -42,13 +50,20 @@ interface FabricItem {
   id: string;
   displayName: string;
   type?: string;
-  properties?: { queryServiceUri?: string };
+  properties?: {
+    queryServiceUri?: string;
+    sqlEndpointProperties?: { connectionString?: string | null; provisioningStatus?: string } | null;
+  };
 }
 
 /** The text of an error without anything that could be a secret: one line, at most 300 characters. */
 export function brief(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
-  return text.replace(/\s+/g, ' ').replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, 'Bearer …').slice(0, 300);
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, 'Bearer …')
+    .replace(/(client_secret|password)=[^&\s]+/gi, '$1=…')
+    .slice(0, 300);
 }
 
 async function listAll(url: string, token: string, fetchImpl: typeof fetch): Promise<FabricItem[]> {
@@ -72,17 +87,16 @@ async function listAll(url: string, token: string, fetchImpl: typeof fetch): Pro
 }
 
 let cached: { at: number; value: Lookup } | undefined;
+let cachedLakehouse: { at: number; value: LakehouseLookup } | undefined;
 
 /** Forget the looked-up identifiers. Used by the connection check and by the tests. */
 export function clearLookup(): void {
   cached = undefined;
+  cachedLakehouse = undefined;
 }
 
-export async function lookup(access: Access, now: number = Date.now()): Promise<Lookup> {
-  if (cached && now - cached.at < LOOKUP_TTL_MS) return cached.value;
-  const token = access.fabricToken();
-
-  const workspaces = await listAll(`${FABRIC_API}/workspaces`, token, access.fetch);
+async function findWorkspace(token: string, fetchImpl: typeof fetch): Promise<FabricItem> {
+  const workspaces = await listAll(`${FABRIC_API}/workspaces`, token, fetchImpl);
   const workspace = workspaces.find((w) => w.displayName === WORKSPACE_NAME);
   if (!workspace) {
     throw new FabricError(
@@ -90,6 +104,42 @@ export async function lookup(access: Access, now: number = Date.now()): Promise<
       404
     );
   }
+  return workspace;
+}
+
+/** The Lakehouse and the server of its SQL analytics endpoint, by name. Kept for ten minutes. */
+export async function lookupLakehouse(access: Access, now: number = Date.now()): Promise<LakehouseLookup> {
+  if (cachedLakehouse && now - cachedLakehouse.at < LOOKUP_TTL_MS) return cachedLakehouse.value;
+  const token = access.fabricToken();
+  const workspace = await findWorkspace(token, access.fetch);
+  const lakehouses = await listAll(`${FABRIC_API}/workspaces/${workspace.id}/lakehouses`, token, access.fetch);
+  const lakehouse = lakehouses.find((l) => l.displayName === LAKEHOUSE_NAME);
+  if (!lakehouse) {
+    throw new FabricError(`Workspace ${WORKSPACE_NAME} has no Lakehouse named ${LAKEHOUSE_NAME}.`, 404);
+  }
+  const endpoint = lakehouse.properties?.sqlEndpointProperties;
+  const sqlServer = endpoint?.connectionString;
+  if (!sqlServer) {
+    throw new FabricError(
+      `Fabric did not return the SQL endpoint of Lakehouse ${LAKEHOUSE_NAME} (state: ${endpoint?.provisioningStatus ?? 'not given'}).`,
+      502
+    );
+  }
+  const value: LakehouseLookup = {
+    workspaceId: workspace.id,
+    lakehouseId: lakehouse.id,
+    lakehouseName: lakehouse.displayName,
+    sqlServer,
+  };
+  cachedLakehouse = { at: now, value };
+  return value;
+}
+
+export async function lookup(access: Access, now: number = Date.now()): Promise<Lookup> {
+  if (cached && now - cached.at < LOOKUP_TTL_MS) return cached.value;
+  const token = access.fabricToken();
+
+  const workspace = await findWorkspace(token, access.fetch);
 
   const base = `${FABRIC_API}/workspaces/${workspace.id}`;
   const [databases, items] = await Promise.all([

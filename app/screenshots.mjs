@@ -35,15 +35,27 @@ await shot('1-site', 9000);
 // Clicks go without waiting for the page to settle: a software renderer keeps it busy for seconds.
 await page.click('.twin-fleet li:nth-child(7) button', { noWaitAfter: true }); // WT-07, the turbine with the warm gearbox
 await shot('2-turbine', 9000);
+// The turbine taken apart. Its parts move by the frame, and a software renderer takes its time over a frame.
+await page.click('.twin-open', { noWaitAfter: true });
+await page.waitForSelector('.twin-labels.parts-shown', { timeout: 120000 });
+await page.click('.twin-chat header button', { noWaitAfter: true }); // without the chat the parts get the page
+await shot('3-components', 16000);
 await page.evaluate(() => {
   window.__preview.provider.injectFault('WT-07');
-  window.__preview.advance(120); // the fault at its height: derated, alarm raised
+  window.__preview.advance(108); // the fault at its height: derated, four alarms on the gearbox
 });
-await shot('3-fault-building', 12000);
-await page.evaluate(() => window.__preview.advance(50)); // tripped
-await shot('4-tripped', 12000);
+await shot('4-components-fault', 12000);
+const parts = await page.evaluate(() => ({
+  labels: [...document.querySelectorAll('.twin-part')].map((n) => `${n.dataset.part}:${n.dataset.level}`),
+  rows: document.querySelectorAll('.twin-parts li').length,
+  opened: window.__twin.openedTurbine,
+}));
+await page.click('.twin-chat-toggle', { noWaitAfter: true });
+await page.click('.twin-open', { noWaitAfter: true });
+await page.waitForFunction(() => document.querySelectorAll('.twin-part').length === 0, undefined, { timeout: 120000 });
+await shot('5-fault', 9000);
 await page.click('.twin-button', { noWaitAfter: true }); // whole site
-await shot('5-site-with-fault', 9000);
+await shot('6-site-with-fault', 9000);
 
 const counts = await page.evaluate(() => ({
   labels: document.querySelectorAll('.twin-label').length,
@@ -51,5 +63,6 @@ const counts = await page.evaluate(() => ({
   canvas: document.querySelector('.twin-canvas')?.width ?? 0,
 }));
 await browser.close();
-console.log(JSON.stringify({ ...counts, problems }));
-if (problems.length > 0 || counts.labels !== 15 || counts.fleet !== 12 || counts.canvas === 0) process.exit(1);
+console.log(JSON.stringify({ ...counts, parts, problems }));
+const partsRight = parts.labels.length === 11 && parts.rows === 11 && parts.opened === 'WT-07' && parts.labels.includes('GBX:2');
+if (problems.length > 0 || counts.labels !== 15 || counts.fleet !== 12 || counts.canvas === 0 || !partsRight) process.exit(1);

@@ -10,7 +10,7 @@
 //    Expected: 12 rows while the simulator runs, none when it has been silent for 10 minutes.
 TurbineTelemetry
 | where Timestamp > ago(10m)
-| summarize arg_max(Timestamp, State, WindSpeed, WindDirection, AmbientTemp, ActivePower, PowerSetpoint, RotorSpeed, PitchAngle, NacelleDirection, YawError, GearboxOilTemp, GearboxBearingTemp, GearboxVibration, GeneratorWindingTemp, MainBearingTemp, TowerVibration) by TurbineId
+| summarize arg_max(Timestamp, State, WindSpeed, WindDirection, AmbientTemp, ActivePower, PowerSetpoint, RotorSpeed, PitchAngle, NacelleDirection, YawError, GearboxOilTemp, GearboxBearingTemp, GearboxOilPressure, GearboxVibration, GeneratorWindingTemp, GeneratorBearingTemp, MainBearingTemp, TransformerTemp, HydraulicPressure, TowerVibration) by TurbineId
 | order by TurbineId asc
 
 // 2. The alarms that are raised and have not cleared. Expected: no row on a healthy site.

@@ -34,9 +34,13 @@ export interface TurbineLive {
   yawError: number;
   gearboxOilTemp: number;
   gearboxBearingTemp: number;
+  gearboxOilPressure: number;
   gearboxVibration: number;
   generatorWindingTemp: number;
+  generatorBearingTemp: number;
   mainBearingTemp: number;
+  transformerTemp: number;
+  hydraulicPressure: number;
   towerVibration: number;
 }
 
@@ -66,8 +70,13 @@ export interface Weather {
 }
 
 export interface LiveState {
-  /** Where the values come from: the KQL database, or the simulation built into the app. */
+  /** Where the values come from: Fabric, or the simulation built into the app. */
   source: 'fabric' | 'sample';
+  /**
+   * The way the values took. `eventhouse`: read from the KQL database as a service principal, seconds
+   * old. `lakehouse`: read from the copies of the same tables in the Lakehouse, minutes old.
+   */
+  route: 'eventhouse' | 'lakehouse' | 'sample';
   /** Time of the newest telemetry row, ISO 8601, UTC. */
   asOf: string;
   turbines: TurbineLive[];
@@ -92,9 +101,19 @@ export interface AgentAnswer {
   seconds: number;
 }
 
-/** One line of the connection check. `detail` never holds a token. */
+/** One line of the connection check. `detail` never holds a token or a secret. */
 export interface DiagnosticStep {
   step: string;
   ok: boolean;
+  /** True for a step that was left out on purpose, such as a route that is not set up. */
+  skipped?: boolean;
   detail: string;
+}
+
+/**
+ * What a function returns in place of its result when it could not do its work. The functions host
+ * reports a function that throws as "InternalError" without the reason, so the reason travels here.
+ */
+export interface Failure {
+  error: string;
 }

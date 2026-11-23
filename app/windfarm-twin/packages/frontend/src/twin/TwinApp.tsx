@@ -2,11 +2,12 @@
  * The wind farm twin: the 3D scene with its panels. It asks the provider for new values every five
  * seconds and gives them to the scene and the panels.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { TwinView } from './TwinView';
+import type { PartKey } from './data/components';
 import type { LiveState } from './data/contract';
-import { POLL_MS, STALE_AFTER_S, type TwinDataProvider } from './data/provider';
+import { type Freshness, type TwinDataProvider, ageText, freshnessOf, pollDelay } from './data/provider';
 import { SITE } from './data/site';
 import type { SceneEngine } from './scene/SceneEngine';
 import './twin.css';
@@ -26,12 +27,14 @@ function useNow(everyMs: number): number {
   return now;
 }
 
-type Freshness = 'loading' | 'live' | 'stale' | 'silent' | 'sample' | 'error';
 
 export function TwinApp({ provider }: { provider: TwinDataProvider }) {
   const [live, setLive] = useState<LiveState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  /** The turbine that is shown taken apart. It closes when another turbine is selected. */
+  const [opened, setOpened] = useState<string | null>(null);
+  const [hotPart, setHotPart] = useState<PartKey | null>(null);
   const [chatOpen, setChatOpen] = useState(true);
   const [chatRequest, setChatRequest] = useState<{ key: number; question: string } | null>(null);
   const [checking, setChecking] = useState(false);
@@ -43,9 +46,11 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
     let timer = 0;
     const poll = async () => {
       let failed = false;
+      let route: 'eventhouse' | 'lakehouse' | 'sample' | undefined;
       try {
         const state = await provider.getLiveState();
         if (stop) return;
+        route = state.route;
         setLive(state);
         setError(null);
       } catch (e) {
@@ -53,7 +58,7 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
         failed = true;
         setError(errorText(e));
       }
-      timer = window.setTimeout(poll, failed ? POLL_MS * 3 : POLL_MS);
+      timer = window.setTimeout(poll, pollDelay(route, failed));
     };
     void poll();
     return () => {
@@ -71,15 +76,40 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
   }, [live]);
 
   const ageS = live?.asOf ? Math.max(0, Math.round((now - new Date(live.asOf).getTime()) / 1000)) : null;
-  const freshness: Freshness = error && !live ? 'error' : !live ? 'loading' : live.source === 'sample' ? 'sample' : live.turbines.length === 0 ? 'silent' : error ? 'error' : ageS !== null && ageS > STALE_AFTER_S ? 'stale' : 'live';
+  const freshness: Freshness = freshnessOf(live, ageS, error !== null);
   const badge: Record<Freshness, string> = {
     loading: 'Connecting…',
     live: `Live · ${ageS ?? 0} s ago`,
-    stale: `Stale · last value ${ageS !== null && ageS > 120 ? `${Math.round(ageS / 60)} min` : `${ageS} s`} ago`,
-    silent: 'No telemetry in the last 10 minutes',
+    delayed: `Lakehouse copy · ${ageText(ageS)} behind`,
+    stale: `Stale · last value ${ageText(ageS)} ago`,
+    silent: live?.route === 'lakehouse' ? 'No telemetry in the last hour' : 'No telemetry in the last 10 minutes',
     sample: 'Sample data',
     error: 'Not connected',
   };
+  const badgeTitle =
+    freshness === 'delayed'
+      ? 'These values come from the copies of the tables in the Lakehouse, which are written every few minutes. Open the connection check to see why the Eventhouse is not used.'
+      : 'Open the connection check';
+
+  const select = useCallback((id: string | null) => {
+    setSelected(id);
+    setOpened((open) => (open === id ? open : null));
+    setHotPart(null);
+  }, []);
+  const exploded = selected !== null && opened === selected;
+  useEffect(() => {
+    if (!exploded) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpened(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [exploded]);
+
+  // The chat covers part of the scene: with it opened or closed, an opened turbine is fitted to what is left.
+  useEffect(() => {
+    engine.current?.reframe();
+  }, [chatOpen]);
 
   const selectedLive = live?.turbines.find((t) => t.id === selected);
   const ask = (question: string) => {
@@ -88,8 +118,8 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
   };
 
   return (
-    <div className={selected ? 'twin-root has-selection' : 'twin-root'}>
-      <TwinView live={live} selected={selected} onSelect={setSelected} engineRef={engine} />
+    <div className={selected ? (exploded ? 'twin-root has-selection is-open' : 'twin-root has-selection') : 'twin-root'}>
+      <TwinView live={live} selected={selected} exploded={exploded} hotPart={hotPart} onPart={setHotPart} onSelect={select} engineRef={engine} />
 
       <header className="twin-panel twin-top">
         <div className="twin-title">
@@ -135,17 +165,17 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
           <b className={live && live.alarms.length > 0 ? 'bad' : ''}>{live ? live.alarms.length : '–'}</b>
         </div>
         <div className="twin-spacer" />
-        <button type="button" className={`twin-badge ${freshness}`} onClick={() => setChecking(true)} title="Open the connection check">
+        <button type="button" className={`twin-badge ${freshness}`} onClick={() => setChecking(true)} title={badgeTitle}>
           <i />
           {badge[freshness]}
         </button>
-        <button type="button" className="twin-button" onClick={() => { setSelected(null); engine.current?.overview(); }}>
+        <button type="button" className="twin-button" onClick={() => { select(null); engine.current?.overview(); }}>
           Whole site
         </button>
       </header>
 
-      <FleetList live={live} selected={selected} onSelect={setSelected} />
-      <AlarmFeed alarms={live?.alarms ?? []} onSelect={setSelected} />
+      <FleetList live={live} selected={selected} onSelect={select} />
+      <AlarmFeed alarms={live?.alarms ?? []} onSelect={select} />
       {selected ? (
         <TurbinePanel
           key={selected}
@@ -153,7 +183,11 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
           turbine={selectedLive}
           alarms={(live?.alarms ?? []).filter((a) => a.turbineId === selected)}
           provider={provider}
-          onClose={() => setSelected(null)}
+          exploded={exploded}
+          onExplode={(open) => setOpened(open ? selected : null)}
+          hotPart={hotPart}
+          onHotPart={setHotPart}
+          onClose={() => select(null)}
           onAsk={ask}
         />
       ) : null}

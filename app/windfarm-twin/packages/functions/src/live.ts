@@ -1,16 +1,49 @@
 /**
- * The live values of the twin: the newest row of every turbine, the active alarms and the met mast,
- * read from the KQL database. The four queries are also in `fabric/kql/94-twin-app-queries.kql` of the
- * repository, where they can be run by hand.
+ * The live values of the twin: the newest row of every turbine, the active alarms and the met mast.
+ *
+ * They can come two ways, and each way has functions of its own in `function_app.ts`:
+ *
+ *   eventhouse  KQL on the KQL database, as a service principal (`principal.ts`). Seconds old.
+ *   lakehouse   T-SQL on the copies of the same tables in the Lakehouse (`sql.ts`), as the owner of
+ *               the app. Minutes old, and there without any set-up.
+ *
+ * The queries are also in the repository, where they can be run by hand:
+ * `fabric/kql/94-twin-app-queries.kql` and `fabric/sql/94-twin-app-queries.sql`.
  */
-import { LIVE_WINDOW } from './config.js';
+import { LAKEHOUSE_WINDOW_MINUTES, LIVE_WINDOW } from './config.js';
 import type { Alarm, DiagnosticStep, LiveState, TrendPoint, TurbineLive, TurbineState, Weather } from './contract.js';
-import { type Access, type Lookup, brief, clearLookup, lookup } from './fabric.js';
+import { type Access, type Lookup, brief, clearLookup, lookup, lookupLakehouse } from './fabric.js';
 import { KustoError, runQuery } from './kusto.js';
+import { NoPrincipal, type Principal, clearPrincipalToken, principalToken } from './principal.js';
+import type { Row, SqlBatch } from './sql.js';
+
+/** The columns of TurbineTelemetry the twin shows, besides TurbineId and Timestamp. */
+export const TELEMETRY_COLUMNS = [
+  'State',
+  'WindSpeed',
+  'WindDirection',
+  'AmbientTemp',
+  'ActivePower',
+  'PowerSetpoint',
+  'RotorSpeed',
+  'PitchAngle',
+  'NacelleDirection',
+  'YawError',
+  'GearboxOilTemp',
+  'GearboxBearingTemp',
+  'GearboxOilPressure',
+  'GearboxVibration',
+  'GeneratorWindingTemp',
+  'GeneratorBearingTemp',
+  'MainBearingTemp',
+  'TransformerTemp',
+  'HydraulicPressure',
+  'TowerVibration',
+] as const;
 
 export const TURBINES_QUERY = `TurbineTelemetry
 | where Timestamp > ago(${LIVE_WINDOW})
-| summarize arg_max(Timestamp, State, WindSpeed, WindDirection, AmbientTemp, ActivePower, PowerSetpoint, RotorSpeed, PitchAngle, NacelleDirection, YawError, GearboxOilTemp, GearboxBearingTemp, GearboxVibration, GeneratorWindingTemp, MainBearingTemp, TowerVibration) by TurbineId
+| summarize arg_max(Timestamp, ${TELEMETRY_COLUMNS.join(', ')}) by TurbineId
 | order by TurbineId asc`;
 
 export const ALARMS_QUERY = `ActiveAlarms()
@@ -34,6 +67,62 @@ export function trendQuery(turbineId: string, minutes: number): string {
 | where Timestamp > ago(${span}m) and TurbineId == '${turbineId}'
 | summarize ActivePower = avg(ActivePower), WindSpeed = avg(WindSpeed), RotorSpeed = avg(RotorSpeed), GearboxOilTemp = avg(GearboxOilTemp), GearboxBearingTemp = avg(GearboxBearingTemp), GearboxVibration = avg(GearboxVibration) by Timestamp = bin(Timestamp, 1m)
 | order by Timestamp asc`;
+}
+
+const TREND_COLUMNS = ['ActivePower', 'WindSpeed', 'RotorSpeed', 'GearboxOilTemp', 'GearboxBearingTemp', 'GearboxVibration'] as const;
+
+/*
+ * The same four questions in T-SQL, for the copies of the tables in the Lakehouse. The newest row
+ * there is minutes old, so the search goes back LAKEHOUSE_WINDOW_MINUTES. Names are written as the
+ * Eventhouse spells them: the SQL endpoint tells capitals from small letters.
+ */
+export const SQL_TURBINES = `WITH newest AS (
+  SELECT TurbineId, [Timestamp], ${TELEMETRY_COLUMNS.join(', ')},
+         ROW_NUMBER() OVER (PARTITION BY TurbineId ORDER BY [Timestamp] DESC) AS rn
+  FROM TurbineTelemetry
+  WHERE [Timestamp] > DATEADD(minute, -${LAKEHOUSE_WINDOW_MINUTES}, SYSUTCDATETIME())
+)
+SELECT TurbineId, [Timestamp], ${TELEMETRY_COLUMNS.join(', ')}
+FROM newest
+WHERE rn = 1
+ORDER BY TurbineId`;
+
+/** What the function ActiveAlarms() of the KQL database does, on the copies of its two tables. */
+export const SQL_ALARMS = `WITH started AS (
+  SELECT TOP 1 DATEADD(second, -CAST(UptimeSeconds AS int), [Timestamp]) AS StartedAt
+  FROM EdgeHeartbeats
+  ORDER BY [Timestamp] DESC
+), newest AS (
+  SELECT [Timestamp], TurbineId, AlarmCode, Status, Severity, Component, Description, Value, Threshold, Unit, SopId, AlarmId,
+         ROW_NUMBER() OVER (PARTITION BY AlarmId ORDER BY [Timestamp] DESC) AS rn
+  FROM AlarmEvents
+  WHERE AlarmCode <> 'COMMS-RESTORED'
+)
+SELECT TOP 100 [Timestamp] AS RaisedAt, TurbineId, AlarmCode, Severity, Component, Description, Value, Threshold, Unit, SopId, AlarmId
+FROM newest
+WHERE rn = 1 AND Status = 'raised'
+  AND ((SELECT StartedAt FROM started) IS NULL OR [Timestamp] >= DATEADD(minute, -1, (SELECT StartedAt FROM started)))
+ORDER BY [Timestamp] DESC`;
+
+export const SQL_WEATHER = `SELECT TOP 1 [Timestamp], WindSpeed, WindDirection, WindGust, AmbientTemp, AirDensity
+FROM WeatherObservations
+WHERE [Timestamp] > DATEADD(minute, -${LAKEHOUSE_WINDOW_MINUTES}, SYSUTCDATETIME())
+ORDER BY [Timestamp] DESC`;
+
+export const SQL_PROBE = `SELECT COUNT(*) AS [Rows], COUNT(DISTINCT TurbineId) AS Turbines, MAX([Timestamp]) AS Newest
+FROM TurbineTelemetry
+WHERE [Timestamp] > DATEADD(minute, -${LAKEHOUSE_WINDOW_MINUTES}, SYSUTCDATETIME())`;
+
+/** The trend of one turbine in T-SQL, one row a minute. The same checks as `trendQuery`. */
+export function sqlTrendQuery(turbineId: string, minutes: number): string {
+  if (!TURBINE_ID.test(turbineId)) throw new Error(`Not a turbine identifier: ${brief(turbineId)}`);
+  const span = Math.min(360, Math.max(5, Math.round(Number(minutes) || 60)));
+  const minute = `DATEADD(minute, DATEDIFF(minute, '2000-01-01', [Timestamp]), CAST('2000-01-01' AS datetime2(0)))`;
+  return `SELECT ${minute} AS [Timestamp], ${TREND_COLUMNS.map((c) => `AVG(${c}) AS ${c}`).join(', ')}
+FROM TurbineTelemetry
+WHERE [Timestamp] > DATEADD(minute, -${span}, SYSUTCDATETIME()) AND TurbineId = '${turbineId}'
+GROUP BY ${minute}
+ORDER BY [Timestamp]`;
 }
 
 const STATES: readonly TurbineState[] = [
@@ -68,9 +157,13 @@ export function toTurbine(row: Record<string, unknown>): TurbineLive {
     yawError: num(row.YawError),
     gearboxOilTemp: num(row.GearboxOilTemp),
     gearboxBearingTemp: num(row.GearboxBearingTemp),
+    gearboxOilPressure: num(row.GearboxOilPressure),
     gearboxVibration: num(row.GearboxVibration),
     generatorWindingTemp: num(row.GeneratorWindingTemp),
+    generatorBearingTemp: num(row.GeneratorBearingTemp),
     mainBearingTemp: num(row.MainBearingTemp),
+    transformerTemp: num(row.TransformerTemp),
+    hydraulicPressure: num(row.HydraulicPressure),
     towerVibration: num(row.TowerVibration),
   };
 }
@@ -116,111 +209,110 @@ export function toTrendPoint(row: Record<string, unknown>): TrendPoint {
 }
 
 /**
- * Which token the Eventhouse accepted, and under which name it knows the database. Both are found
- * out at the first query and remembered while the function host lives.
+ * Under which name the Eventhouse knows the database: its display name or, when it does not know
+ * that, its item identifier. Found out at the first query and remembered while the host lives.
  */
-type TokenRoute = 'kusto' | 'fabric';
-let acceptedRoute: TokenRoute | undefined;
 let acceptedDatabase: string | undefined;
 
+/** Forget it. Used by the connection check and by the tests. */
 export function resetRoute(): void {
-  acceptedRoute = undefined;
   acceptedDatabase = undefined;
 }
 
-export function currentRoute(): { token: TokenRoute | undefined; database: string | undefined } {
-  return { token: acceptedRoute, database: acceptedDatabase };
+export function currentDatabase(): string | undefined {
+  return acceptedDatabase;
 }
 
-const refused = (error: unknown): boolean =>
-  error instanceof KustoError && (error.status === 401 || error.status === 403);
 const unknownDatabase = (error: unknown): boolean =>
   error instanceof KustoError && error.status >= 400 && error.status < 500 && /database/i.test(error.message);
 
-/**
- * Runs one query. The Eventhouse is asked first with a token issued for it and, when the host has
- * none or the Eventhouse refuses it, with the token for the Fabric API. The database is addressed
- * by its name and, when the Eventhouse does not know that name, by its item identifier.
- */
-export async function query(access: Access, found: Lookup, csl: string): Promise<Record<string, unknown>[]> {
-  const routes: TokenRoute[] = acceptedRoute ? [acceptedRoute] : ['kusto', 'fabric'];
+/** Runs KQL on the Eventhouse with the token of the service principal. */
+export async function queryEventhouse(access: Access, found: Lookup, token: string, csl: string): Promise<Row[]> {
   const databases = acceptedDatabase ? [acceptedDatabase] : [found.kqlDatabaseName, found.kqlDatabaseId];
-  let failure: unknown; // what the Eventhouse said; it says more than "no token"
-  let missing: Error | undefined;
-  for (const route of routes) {
-    let token: string;
+  let failure: unknown;
+  for (const database of databases) {
     try {
-      token = route === 'kusto' ? access.kustoToken() : access.fabricToken();
+      const rows = await runQuery({ queryServiceUri: found.queryServiceUri, database, query: csl, token, fetch: access.fetch });
+      acceptedDatabase = database;
+      return rows;
     } catch (error) {
-      missing = new Error(`The host supplied no ${route === 'kusto' ? 'Eventhouse' : 'Fabric'} token: ${brief(error)}`);
-      continue;
-    }
-    for (const database of databases) {
-      try {
-        const rows = await runQuery({ queryServiceUri: found.queryServiceUri, database, query: csl, token, fetch: access.fetch });
-        acceptedRoute = route;
-        acceptedDatabase = database;
-        return rows;
-      } catch (error) {
-        failure = error;
-        if (unknownDatabase(error)) continue; // try the identifier
-        if (refused(error)) break; // try the other token
-        throw error;
-      }
+      failure = error;
+      if (unknownDatabase(error)) continue; // try the identifier
+      if (acceptedDatabase) resetRoute(); // what worked before no longer does: start over next time
+      throw error;
     }
   }
-  if (acceptedRoute && refused(failure)) resetRoute(); // what worked before no longer does: start over next time
-  throw failure ?? missing ?? new Error('No token for the Eventhouse.');
+  throw failure ?? new Error('The Eventhouse was not asked.');
 }
 
-export async function getLiveState(access: Access): Promise<LiveState> {
-  const found = await lookup(access);
-  // The first query settles the token and the database name; the other two then run side by side.
-  const turbineRows = await query(access, found, TURBINES_QUERY);
-  const [alarmRows, weatherRows] = await Promise.all([
-    query(access, found, ALARMS_QUERY),
-    query(access, found, WEATHER_QUERY),
-  ]);
+function liveState(route: 'eventhouse' | 'lakehouse', turbineRows: Row[], alarmRows: Row[], weatherRows: Row[]): LiveState {
   const turbines = turbineRows.map(toTurbine);
   const asOf = turbines.reduce((latest, t) => (t.timestamp > latest ? t.timestamp : latest), '');
-  return {
-    source: 'fabric',
-    asOf,
-    turbines,
-    alarms: alarmRows.map(toAlarm),
-    weather: toWeather(weatherRows[0]),
-  };
+  return { source: 'fabric', route, asOf, turbines, alarms: alarmRows.map(toAlarm), weather: toWeather(weatherRows[0]) };
 }
 
-export async function getTurbineTrend(access: Access, turbineId: string, minutes: number): Promise<TrendPoint[]> {
-  const csl = trendQuery(turbineId, minutes);
-  const found = await lookup(access);
-  return (await query(access, found, csl)).map(toTrendPoint);
+/** The live values from the KQL database, as the service principal. Throws NoPrincipal when there is none. */
+export async function liveFromEventhouse(access: Access, principal: () => Principal): Promise<LiveState> {
+  const who = principal();
+  const [found, token] = await Promise.all([lookup(access), principalToken(who, access.fetch)]);
+  // The first query settles the name of the database; the other two then run side by side.
+  const turbineRows = await queryEventhouse(access, found, token, TURBINES_QUERY);
+  const [alarmRows, weatherRows] = await Promise.all([
+    queryEventhouse(access, found, token, ALARMS_QUERY),
+    queryEventhouse(access, found, token, WEATHER_QUERY),
+  ]);
+  return liveState('eventhouse', turbineRows, alarmRows, weatherRows);
 }
+
+export async function trendFromEventhouse(access: Access, principal: () => Principal, turbineId: string, minutes: number): Promise<TrendPoint[]> {
+  const csl = trendQuery(turbineId, minutes);
+  const who = principal();
+  const [found, token] = await Promise.all([lookup(access), principalToken(who, access.fetch)]);
+  return (await queryEventhouse(access, found, token, csl)).map(toTrendPoint);
+}
+
+/** Opens the SQL endpoint of a Lakehouse: server, database (the item identifier), token. */
+export type SqlConnect = (server: string, database: string, token: string) => SqlBatch;
+
+/** The live values from the copies of the tables in the Lakehouse, as the owner of the app. */
+export async function liveFromLakehouse(access: Access, sqlToken: () => string, connect: SqlConnect): Promise<LiveState> {
+  const found = await lookupLakehouse(access);
+  const batch = connect(found.sqlServer, found.lakehouseId, sqlToken());
+  const [turbineRows, alarmRows, weatherRows] = await batch([SQL_TURBINES, SQL_ALARMS, SQL_WEATHER]);
+  return liveState('lakehouse', turbineRows ?? [], alarmRows ?? [], weatherRows ?? []);
+}
+
+export async function trendFromLakehouse(access: Access, sqlToken: () => string, connect: SqlConnect, turbineId: string, minutes: number): Promise<TrendPoint[]> {
+  const statement = sqlTrendQuery(turbineId, minutes);
+  const found = await lookupLakehouse(access);
+  const [rows] = await connect(found.sqlServer, found.lakehouseId, sqlToken())([statement]);
+  return (rows ?? []).map(toTrendPoint);
+}
+
+const step = (steps: DiagnosticStep[], name: string, ok: boolean, detail: string): void => {
+  steps.push({ step: name, ok, detail: brief(detail) });
+};
+
+const minutesOld = (iso: string, now: number): string => {
+  const ms = now - new Date(iso).getTime();
+  if (!iso || !Number.isFinite(ms)) return 'age unknown';
+  return ms < 90_000 ? `${Math.max(0, Math.round(ms / 1000))} s old` : `${Math.round(ms / 60_000)} min old`;
+};
 
 /**
- * Tries every connection the twin needs, one after the other, and says what happened at each.
- * The steps do not stop at the first failure, so one run shows everything that is wrong.
+ * Tries what the real-time route and the chat need, one thing after the other, and says what happened
+ * at each. The steps do not stop at the first failure, so one run shows everything that is wrong.
  */
-export async function getDiagnostics(access: Access): Promise<DiagnosticStep[]> {
+export async function checkEventhouse(access: Access, principal: () => Principal, now: number = Date.now()): Promise<DiagnosticStep[]> {
   const steps: DiagnosticStep[] = [];
-  const add = (step: string, ok: boolean, detail: string) => steps.push({ step, ok, detail: brief(detail) });
 
   let fabricOk = false;
   try {
     access.fabricToken();
     fabricOk = true;
-    add('Token for the Fabric API', true, 'supplied by the host');
+    step(steps, 'Token for the Fabric API', true, 'supplied by the host');
   } catch (error) {
-    add('Token for the Fabric API', false, brief(error));
-  }
-  let kustoOk = false;
-  try {
-    access.kustoToken();
-    kustoOk = true;
-    add('Token for the Eventhouse', true, 'supplied by the host');
-  } catch (error) {
-    add('Token for the Eventhouse', false, brief(error));
+    step(steps, 'Token for the Fabric API', false, brief(error));
   }
 
   let found: Lookup | undefined;
@@ -228,35 +320,80 @@ export async function getDiagnostics(access: Access): Promise<DiagnosticStep[]> 
     try {
       clearLookup();
       found = await lookup(access);
-      add('Workspace and KQL database', true, `${found.kqlDatabaseName} at ${found.queryServiceUri}`);
-      add('Data agent', found.dataAgentId !== null, found.dataAgentId ?? 'no item with the name of the agent in the workspace');
+      step(steps, 'Workspace and KQL database', true, `${found.kqlDatabaseName} at ${found.queryServiceUri}`);
+      step(steps, 'Data agent, for the chat', found.dataAgentId !== null, found.dataAgentId ?? 'no item with the name of the agent in the workspace');
     } catch (error) {
-      add('Workspace and KQL database', false, brief(error));
+      step(steps, 'Workspace and KQL database', false, brief(error));
     }
   }
 
-  if (found) {
-    for (const route of ['kusto', 'fabric'] as const) {
-      const label = route === 'kusto' ? 'Query with the Eventhouse token' : 'Query with the Fabric token';
-      if (route === 'kusto' ? !kustoOk : !fabricOk) {
-        add(label, false, 'no token');
-        continue;
-      }
-      const only: Access = {
-        fetch: access.fetch,
-        fabricToken: route === 'fabric' ? access.fabricToken : () => { throw new Error('not used in this step'); },
-        kustoToken: route === 'kusto' ? access.kustoToken : () => { throw new Error('not used in this step'); },
-      };
-      try {
-        resetRoute();
-        const rows = await query(only, found, 'TurbineTelemetry | where Timestamp > ago(2m) | summarize Rows = count(), Turbines = dcount(TurbineId), Newest = max(Timestamp)');
-        const r = rows[0] ?? {};
-        add(label, true, `${num(r.Rows)} rows from ${num(r.Turbines)} turbines in the last 2 minutes; newest ${text(r.Newest) || 'none'}`);
-      } catch (error) {
-        add(label, false, brief(error));
-      }
+  let who: Principal | undefined;
+  try {
+    who = principal();
+    step(steps, 'Eventhouse route: service principal', true, `application ${who.clientId} in tenant ${who.tenantId}`);
+  } catch (error) {
+    if (error instanceof NoPrincipal) {
+      steps.push({ step: 'Eventhouse route: service principal', ok: false, skipped: true, detail: brief(error) });
+    } else {
+      step(steps, 'Eventhouse route: service principal', false, brief(error));
     }
-    resetRoute();
+  }
+
+  let token: string | undefined;
+  if (who) {
+    try {
+      clearPrincipalToken();
+      token = await principalToken(who, access.fetch);
+      step(steps, 'Eventhouse route: token from Microsoft Entra ID', true, 'issued to the service principal');
+    } catch (error) {
+      step(steps, 'Eventhouse route: token from Microsoft Entra ID', false, brief(error));
+    }
+  }
+
+  if (found && token) {
+    try {
+      resetRoute();
+      const rows = await queryEventhouse(access, found, token, 'TurbineTelemetry | where Timestamp > ago(2m) | summarize Rows = count(), Turbines = dcount(TurbineId), Newest = max(Timestamp)');
+      const r = rows[0] ?? {};
+      const newest = text(r.Newest);
+      step(steps, 'Eventhouse route: query', num(r.Rows) > 0, num(r.Rows) > 0
+        ? `${num(r.Rows)} rows from ${num(r.Turbines)} turbines in the last 2 minutes; newest ${minutesOld(newest, now)}`
+        : 'the query ran and found no telemetry in the last 2 minutes: the simulator or the edge VM is stopped');
+    } catch (error) {
+      step(steps, 'Eventhouse route: query', false, brief(error));
+    }
+  }
+  return steps;
+}
+
+/** Tries what the Lakehouse route needs, in the same manner. */
+export async function checkLakehouse(access: Access, sqlToken: () => string, connect: SqlConnect, now: number = Date.now()): Promise<DiagnosticStep[]> {
+  const steps: DiagnosticStep[] = [];
+  let token: string | undefined;
+  try {
+    token = sqlToken();
+    step(steps, 'Lakehouse route: token for SQL', true, 'supplied by the host');
+  } catch (error) {
+    step(steps, 'Lakehouse route: token for SQL', false, brief(error));
+  }
+  let found: Awaited<ReturnType<typeof lookupLakehouse>> | undefined;
+  try {
+    found = await lookupLakehouse(access);
+    step(steps, 'Lakehouse route: Lakehouse and SQL endpoint', true, `${found.lakehouseName} at ${found.sqlServer}`);
+  } catch (error) {
+    step(steps, 'Lakehouse route: Lakehouse and SQL endpoint', false, brief(error));
+  }
+  if (found && token) {
+    try {
+      const [rows] = await connect(found.sqlServer, found.lakehouseId, token)([SQL_PROBE]);
+      const r = rows?.[0] ?? {};
+      const newest = text(r.Newest);
+      step(steps, 'Lakehouse route: query', num(r.Rows) > 0, num(r.Rows) > 0
+        ? `${num(r.Rows)} rows from ${num(r.Turbines)} turbines in the last ${LAKEHOUSE_WINDOW_MINUTES} minutes; newest ${minutesOld(newest, now)}`
+        : `the query ran and found no telemetry in the last ${LAKEHOUSE_WINDOW_MINUTES} minutes`);
+    } catch (error) {
+      step(steps, 'Lakehouse route: query', false, brief(error));
+    }
   }
   return steps;
 }

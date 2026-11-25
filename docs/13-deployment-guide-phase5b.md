@@ -91,6 +91,8 @@ The notebook of Phase 5a changed in two ways that matter now, so the copy in the
 
 **Check.** The cell that starts with `# The command, checked` prints the command, and the last code cell prints `dry_run is True: nothing was sent.` Then set both values back (`turbine = ""`, `dry_run = False`) and let the notebook save. If you leave `WT-07` in, a run without a turbine curtails WT-07 again.
 
+From here on this notebook belongs to the agent. To send commands by hand, for a test or a demo, use the notebook `13_command_center`: one line per command, the state of the turbines, and a check that each command took effect. It is described in [the Phase 5a guide](12-deployment-guide-phase5a.md#the-command-center-commands-by-hand-from-then-on).
+
 The action of step 4 points to this notebook by its id. Do this step before step 4; if you ever import the notebook again, run step 4 again as well.
 
 ## Step 3: Rehearse the action without the agent

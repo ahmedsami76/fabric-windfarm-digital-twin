@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Builds the notebook of Phase 5a from tools/edge_command.py.
+"""Builds the generated files of Phase 5.
 
-    python3 tools/build-phase5.py            write fabric/notebooks/12_send_edge_command.ipynb
-    python3 tools/build-phase5.py --check    exit 1 if the file is out of date
+    python3 tools/build-phase5.py            write them
+    python3 tools/build-phase5.py --check    exit 1 if one is out of date
 
-The notebook carries a copy of tools/edge_command.py, so the code that builds a command in Fabric is
+5a: fabric/notebooks/12_send_edge_command.ipynb, from tools/edge_command.py: one command per run, by
+    hand or as the action of the operations agent.
+    fabric/notebooks/13_command_center.ipynb, from tools/edge_command.py and tools/command_center.py:
+    commands by hand, one line each, with the turbines' state and a check that each took effect.
+5b: fabric/kql/06-remediation-readiness.kql and the two texts for the operations agent under
+    fabric/operations-agent/, from tools/remediation_spec.py and data/reference.
+
+Both notebooks carry a copy of tools/edge_command.py, so the code that builds a command in Fabric is
 the code the tests hand to the simulator.
 """
 from __future__ import annotations
@@ -22,23 +29,46 @@ EVENTHUB_PIN = "azure-eventhub==5.15.1"
 WEBSOCKET_PIN = "websocket-client==1.9.2"
 EVENTSTREAM = "WindFarmCommands"
 
-# (kind, source, tags). The cell tagged "parameters" is the one a pipeline or the operations agent
-# overrides. It stands below the %pip cell on purpose: %pip restarts the interpreter, and what was
-# defined above it is gone afterwards (obstacle 3 of Phase 2).
+# The install on demand, shared by both notebooks.
+BRING = f"""def bring(module, pin):
+    \"\"\"Import a library, and install it first when this session does not have it.
+
+    pip runs as a plain command here, not as the %pip magic: the magic is switched off when a notebook
+    runs as a job, which is how the operations agent runs this one.\"\"\"
+    import importlib, site, subprocess, sys
+    try:
+        return importlib.import_module(module)
+    except ImportError:
+        done = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", pin],
+                              capture_output=True, text=True)
+        if done.returncode != 0:
+            raise SystemExit(f"pip could not install {{pin}}: {{(done.stderr or done.stdout)[-600:]}}")
+        if site.getusersitepackages() not in sys.path:   # where pip installs when the runtime's own folder is read-only
+            sys.path.append(site.getusersitepackages())
+        importlib.invalidate_caches()
+        print(f"Installed {{pin}} for this session.")
+        return importlib.import_module(module)"""
+
+# (kind, source, tags). The cell tagged "parameters" is the one a job, a pipeline or the operations
+# agent overrides.
+#
+# There is no %pip cell. The magic is switched off when a notebook runs as a job ("%pip magic command
+# is disabled"), and the action of the operations agent runs it as a job. The send cell installs the two
+# libraries with pip as a plain command, and only when the session does not have them.
 CELLS = [
     ("markdown", f"""# 12 Send a command to the edge
 
-Phase 5a. Sends **one operating command** to a turbine of Northwind Ridge: it writes the command to the eventstream `{EVENTSTREAM}`, from where a data flow of Azure IoT Operations carries it to the control topic on the edge.
+Phase 5. Sends **one operating command** to a turbine of Northwind Ridge: it writes the command to the eventstream `{EVENTSTREAM}`, from where a data flow of Azure IoT Operations carries it to the control topic on the edge.
 
 - The control topic takes five commands: `curtail`, `release`, `stop`, `start`, `reset`. It cannot inject a fault.
-- Set the values in the third cell, then **Run all**. With `dry_run = True` the notebook builds and shows the command and sends nothing.
+- By hand: set the values in the first code cell, `turbine` first, then **Run all**. With `dry_run = True` the notebook builds and shows the command and sends nothing.
+- As a job: the operations agent of Phase 5b runs this notebook as its action `Curtail turbine` and sets `turbine`, `percent`, `duration` and `requested_by`. A run that names no turbine is refused.
 - Before the first run: `bash infra/08-create-command-path.sh` on the workstation (guide: `docs/12-deployment-guide-phase5a.md`).
 
 The notebook reads where to write from the Fabric API each time it runs. No key is kept in it.""", ()),
-    ("code", f"%pip install -q {EVENTHUB_PIN} {WEBSOCKET_PIN}", ()),
-    ("code", f"""# Parameters. A pipeline or the operations agent can set these (this is the parameter cell).
+    ("code", f"""# Parameters. A job, a pipeline or the operations agent can set these (this is the parameter cell).
 command = "curtail"        # curtail, release, stop, start, reset
-turbine = "WT-07"          # WT-01 to WT-12, or the word all
+turbine = ""               # WT-01 to WT-12, or the word all. Empty on purpose: a command names its turbine
 percent = 30               # curtail only: the share of rated power the turbine may still produce
 duration = "10m"           # curtail and stop: for example 90s, 10m, 1h
 reason = ""                # stop: operator or maintenance; otherwise a note that travels with the command
@@ -46,7 +76,7 @@ requested_by = ""          # who asked for it; empty means the user who runs the
 dry_run = False            # True: build and show the command, send nothing
 EVENTSTREAM = "{EVENTSTREAM}\"""", ("parameters",)),
     ("code", GENERATED + "\n__MODULE__", ()),
-    ("code", """# The command, checked before anything is sent.
+    ("code", """# The command, checked before anything is installed or sent.
 if not requested_by:
     try:
         requested_by = notebookutils.runtime.context.get("userName") or ""
@@ -79,14 +109,18 @@ if not source_id:
 settings = send_settings(ask(f"v1/workspaces/{workspace_id}/eventstreams/{eventstream_id}/sources/{source_id}/connection"))
 print(f"Eventstream {EVENTSTREAM} ({eventstream_id})")
 print(f"Writes to {settings['namespace']}, event hub {settings['eventHub']}")""", ()),
-    ("code", """# Send. One event, over port 443.
+    ("code", f"""# Send. One event, over port 443.
+{BRING}
+
+
 if dry_run:
     print("dry_run is True: nothing was sent.")
 else:
-    import websocket  # the library of the transport; named here so that a missing install says so in one line
+    bring("websocket", "{WEBSOCKET_PIN}")   # the transport over port 443; azure-eventhub does not bring it
+    bring("azure.eventhub", "{EVENTHUB_PIN}")
     from azure.eventhub import EventData, EventHubProducerClient, TransportType
 
-    extra = {} if "EntityPath=" in settings["connectionString"] else {"eventhub_name": settings["eventHub"]}
+    extra = {{}} if "EntityPath=" in settings["connectionString"] else {{"eventhub_name": settings["eventHub"]}}
     producer = EventHubProducerClient.from_connection_string(
         settings["connectionString"], transport_type=TransportType.AmqpOverWebsocket, **extra)
     with producer:
@@ -95,7 +129,7 @@ else:
         batch = producer.create_batch()
         batch.add(event)
         producer.send_batch(batch)
-    print(f"Sent: {cmd['command']} for {cmd['turbine']}, request {cmd['requestId']}, at {cmd['issuedAt']} UTC.")
+    print(f"Sent: {{cmd['command']}} for {{cmd['turbine']}}, request {{cmd['requestId']}}, at {{cmd['issuedAt']}} UTC.")
     print("The turbine should follow within a minute. Check with the query in the next cell.")""", ()),
     ("markdown", """## Check
 
@@ -114,22 +148,198 @@ If nothing happens, the guide says where to look: the eventstream's own view fir
 ]
 
 
-def module_source() -> str:
-    text = (ROOT / "tools" / "edge_command.py").read_text(encoding="utf-8")
+GENERATED_CENTER = "# Generated by tools/build-phase5.py from tools/edge_command.py and tools/command_center.py. Change it there."
+KQL_DATABASE = "WindFarmEH"
+
+# The command center. No cell is tagged "parameters": this notebook is for a person at the keyboard and
+# is not meant to run as a job. Notebook 12 stays the one the operations agent runs.
+CENTER_CELLS = [
+    ("markdown", f"""# 13 Command center
+
+Send operating commands to the turbines of Northwind Ridge by hand, one line each, and see each one take effect. For testing the command path, and for showing it.
+
+- Run the first two code cells once per session. After that, run any cell below as often as you like: each is one command.
+- The commands travel the path of Phase 5a: the eventstream `{EVENTSTREAM}`, the data flow of Azure IoT Operations, the control topic on the edge. Before the first run: `bash infra/08-create-command-path.sh` on the workstation.
+- After a command the notebook waits until the telemetry in `{KQL_DATABASE}` shows it, and says how many seconds that took.
+- The control topic takes five commands: `curtail`, `release`, `stop`, `start`, `reset`. It cannot inject a fault or change the wind; those stay on the edge (`simctl`).
+
+This notebook is for you. `12_send_edge_command` is the one the operations agent runs as its action: leave the values in that notebook alone, and send by hand from here.""", ()),
+    ("code", GENERATED_CENTER + "\n__MODULE__", ()),
+    ("code", f"""# Connect. Once per session: where to write commands, where to read the turbines' state.
+import urllib.error
+import urllib.request
+
+import sempy.fabric as fabric
+
+EVENTSTREAM = "{EVENTSTREAM}"
+KQL_DATABASE = "{KQL_DATABASE}"
+client = fabric.FabricRestClient()
+workspace_id = fabric.get_workspace_id()
+
+
+def ask(path):
+    response = client.get(path)
+    if response.status_code != 200:
+        raise SystemExit(f"The Fabric API answered {{response.status_code}} to {{path}}: {{response.text[:300]}}")
+    return response.json()
+
+
+eventstream_id = find_item(ask(f"v1/workspaces/{{workspace_id}}/eventstreams").get("value", []), EVENTSTREAM)
+if not eventstream_id:
+    raise SystemExit(f"No eventstream named {{EVENTSTREAM}} in this workspace. Run: bash infra/08-create-command-path.sh")
+source_id = find_custom_endpoint(ask(f"v1/workspaces/{{workspace_id}}/eventstreams/{{eventstream_id}}/topology"), "sources")
+if not source_id:
+    raise SystemExit(f"The eventstream {{EVENTSTREAM}} has no custom endpoint as a source. Add one in the portal and publish.")
+settings = send_settings(ask(f"v1/workspaces/{{workspace_id}}/eventstreams/{{eventstream_id}}/sources/{{source_id}}/connection"))
+database = next((d for d in ask(f"v1/workspaces/{{workspace_id}}/kqlDatabases").get("value", []) if d.get("displayName") == KQL_DATABASE), None)
+if database is None:
+    raise SystemExit(f"No KQL database named {{KQL_DATABASE}} in this workspace.")
+query_uri = database["properties"]["queryServiceUri"]
+try:
+    me = notebookutils.runtime.context.get("userName") or ""
+except Exception:
+    me = ""
+
+
+def kql(query):
+    \"\"\"The rows of a query on the KQL database, as the signed-in user.\"\"\"
+    request = urllib.request.Request(
+        f"{{query_uri}}/v1/rest/query", method="POST",
+        data=json.dumps({{"db": KQL_DATABASE, "csl": query}}).encode("utf-8"),
+        headers={{"Authorization": f"Bearer {{notebookutils.credentials.getToken(query_uri)}}",
+                 "Content-Type": "application/json; charset=utf-8", "Accept": "application/json"}})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return rows_of(json.loads(response.read()))
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"The KQL database answered {{error.code}}: {{error.read()[:300].decode('utf-8', 'replace')}}") from None
+
+
+{BRING}
+
+
+def status(turbine="all", say=print):
+    \"\"\"The state of the turbines, from the newest telemetry.\"\"\"
+    say(status_table(kql(status_query(turbine))))
+
+
+def send(command, turbine, percent=None, duration="", reason="", wait=True, dry_run=False, say=print):
+    \"\"\"Build one command, check it, send it, and wait until the telemetry shows it.
+
+    send("curtail", "WT-07", percent=30, duration="10m")     send("release", "WT-07")
+    send("stop", "WT-05", duration="15m", reason="maintenance")     send("start", "WT-05")     send("reset", "WT-03")
+    The command that was built last is kept in last_command.\"\"\"
+    global last_command
+    try:
+        cmd = from_parameters(command, turbine, percent=percent, duration=duration, reason=reason, requested_by=me)
+    except CommandError as error:
+        say(f"Not sent: {{error}}")
+        return
+    last_command = cmd
+    say(json.dumps(cmd))
+    if dry_run:
+        say("dry_run: nothing was sent.")
+        return
+    before = by_turbine(kql(effect_query(cmd["turbine"]))) if wait else {{}}
+    bring("websocket", "{WEBSOCKET_PIN}")   # the transport over port 443; azure-eventhub does not bring it
+    bring("azure.eventhub", "{EVENTHUB_PIN}")
+    from azure.eventhub import EventData, EventHubProducerClient, TransportType
+
+    extra = {{}} if "EntityPath=" in settings["connectionString"] else {{"eventhub_name": settings["eventHub"]}}
+    producer = EventHubProducerClient.from_connection_string(
+        settings["connectionString"], transport_type=TransportType.AmqpOverWebsocket, **extra)
+    with producer:
+        event = EventData(payload(cmd))
+        event.content_type = "application/json"
+        batch = producer.create_batch()
+        batch.add(event)
+        producer.send_batch(batch)
+    say(f"Sent: {{cmd['command']}} for {{cmd['turbine']}}, request {{cmd['requestId']}}, at {{cmd['issuedAt']}} UTC.")
+    if wait:
+        follow(cmd, before, lambda: by_turbine(kql(effect_query(cmd["turbine"], since=cmd["issuedAt"]))), say=say)
+
+
+last_command = None
+print(f"Commands go to the eventstream {{EVENTSTREAM}} ({{settings['namespace']}}).")
+print(f"The turbines' state is read from {{KQL_DATABASE}}." + (f" Commands are sent as {{me}}." if me else ""))
+status()""", ()),
+    ("markdown", """## Where the turbines stand
+
+Run this before and after anything. `status("WT-07")` shows one turbine.""", ()),
+    ("code", """status()""", ()),
+    ("markdown", """## Limit a turbine, and lift the limit
+
+`percent` is the share of its rated 4,200 kW the turbine may still produce; 30 is 1,260 kW. A curtailment needs a `duration` (`90s`, `10m`, `1h`) and ends by itself after it. In a weak wind the turbine produces less than the limit anyway: the state and the ring in the twin still change, the power does not.""", ()),
+    ("code", """send("curtail", "WT-07", percent=30, duration="10m")""", ()),
+    ("code", """send("release", "WT-07")""", ()),
+    ("markdown", """## Stop a turbine, and start it again
+
+A stop with the reason `maintenance` shows as `MAINTENANCE`, with `operator` as `STOPPED`. With a `duration` the turbine starts again by itself; without one it stays down until `start`.""", ()),
+    ("code", """send("stop", "WT-05", duration="5m", reason="maintenance")""", ()),
+    ("code", """send("start", "WT-05")""", ()),
+    ("markdown", """## Reset a tripped turbine
+
+A turbine that tripped on a fault shows `FAULT`. It starts again by itself once its alarms have cleared and a lockout time has passed; `reset` lifts the trip, and a derate the controller still holds, at once. On a turbine that has not tripped a reset changes nothing, and the notebook says so.""", ()),
+    ("code", """send("reset", "WT-03")""", ()),
+    ("markdown", """## All twelve, or a look without sending
+
+The word `all` in the place of the turbine means all twelve; nothing else does. `dry_run=True` builds and shows the command and sends nothing. `wait=False` sends and does not wait for the telemetry.""", ()),
+    ("code", """send("curtail", "all", percent=50, duration="2m", dry_run=True)""", ()),
+    ("markdown", """## The same as a panel (optional)
+
+Pick the values and select **Send**; **Status** shows the turbines. The box below the buttons is the log. If no panel appears, or a button does nothing, use the cells above: they do the same, and the panel adds nothing to them but the buttons.""", ()),
+    ("code", """import ipywidgets as widgets
+
+w_command = widgets.Dropdown(options=list(COMMANDS), value="curtail", description="Command")
+w_turbine = widgets.Dropdown(options=TURBINES + ["all"], value="WT-07", description="Turbine")
+w_percent = widgets.IntSlider(value=30, min=0, max=100, step=5, description="Percent")
+w_duration = widgets.Text(value="10m", description="Duration")
+w_reason = widgets.Dropdown(options=["operator", "maintenance"], value="operator", description="Stop as")
+w_wait = widgets.Checkbox(value=True, description="Wait for the telemetry")
+w_send = widgets.Button(description="Send", button_style="warning")
+w_status = widgets.Button(description="Status")
+w_log = widgets.Textarea(value="", disabled=True, layout=widgets.Layout(width="100%", height="260px"))
+
+
+def _log(line):
+    w_log.value = (w_log.value + str(line) + "\\n")[-6000:]
+
+
+def _run(action):
+    w_log.value = ""
+    try:
+        action()
+    except Exception as error:       # a button has nowhere else to show it
+        _log(f"Failed: {error}")
+
+
+w_send.on_click(lambda _: _run(lambda: send(
+    w_command.value, w_turbine.value, percent=w_percent.value, duration=w_duration.value,
+    reason=w_reason.value if w_command.value == "stop" else "", wait=w_wait.value, say=_log)))
+w_status.on_click(lambda _: _run(lambda: status(say=_log)))
+panel = widgets.VBox([widgets.HBox([w_command, w_turbine]), widgets.HBox([w_percent, w_duration, w_reason]),
+                      widgets.HBox([w_send, w_status, w_wait]), w_log])
+display(panel)""", ()),
+]
+
+
+def module_source(name: str = "edge_command.py") -> str:
+    text = (ROOT / "tools" / name).read_text(encoding="utf-8")
     body = text.split('"""', 2)[2].lstrip("\n")          # without the file's own docstring
     return body.replace("from __future__ import annotations\n\n", "").rstrip("\n")
 
 
-def render() -> str:
+def render(cells=None, number: str = "12", generated: str = GENERATED) -> str:
     out = []
-    for index, (kind, source, tags) in enumerate(CELLS):
-        source = source.replace("__MODULE__", module_source())
+    modules = module_source() if number == "12" else module_source() + "\n\n\n" + module_source("command_center.py")
+    for index, (kind, source, tags) in enumerate(CELLS if cells is None else cells):
+        source = source.replace("__MODULE__", modules)
         lines = source.split("\n")
-        cell = {"cell_type": kind, "id": hashlib.sha1(f"12:{index}".encode()).hexdigest()[:12],
+        cell = {"cell_type": kind, "id": hashlib.sha1(f"{number}:{index}".encode()).hexdigest()[:12],
                 "metadata": {}, "source": [line + "\n" for line in lines[:-1]] + [lines[-1]]}
         if kind == "code":
             cell.update({"execution_count": None, "outputs": []})
-            if source.startswith(GENERATED):
+            if source.startswith(generated):
                 cell["metadata"] = {"jupyter": {"source_hidden": True}, "collapsed": True}
             if tags:
                 cell["metadata"]["tags"] = list(tags)
@@ -141,17 +351,27 @@ def render() -> str:
     return json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
 
 
+def outputs() -> dict:
+    sys.path.insert(0, str(ROOT / "tools"))
+    import remediation_spec
+
+    files = {ROOT / "fabric" / "notebooks" / "12_send_edge_command.ipynb": render(),
+             ROOT / "fabric" / "notebooks" / "13_command_center.ipynb": render(CENTER_CELLS, "13", GENERATED_CENTER)}
+    files.update({ROOT / rel: make() for rel, make in remediation_spec.OUTPUTS.items()})
+    return files
+
+
 def main(argv) -> int:
-    path = ROOT / "fabric" / "notebooks" / "12_send_edge_command.ipynb"
-    text = render()
-    if "--check" in argv:
-        if not path.is_file() or path.read_text(encoding="utf-8") != text:
-            print(f"out of date: {path.relative_to(ROOT)}. Run: python3 tools/build-phase5.py", file=sys.stderr)
-            return 1
-        return 0
-    path.write_text(text, encoding="utf-8")
-    print(f"wrote {path.relative_to(ROOT)}")
-    return 0
+    stale = 0
+    for path, text in outputs().items():
+        if "--check" in argv:
+            if not path.is_file() or path.read_text(encoding="utf-8") != text:
+                print(f"out of date: {path.relative_to(ROOT)}. Run: python3 tools/build-phase5.py", file=sys.stderr)
+                stale = 1
+            continue
+        path.write_text(text, encoding="utf-8")
+        print(f"wrote {path.relative_to(ROOT)}")
+    return stale
 
 
 if __name__ == "__main__":

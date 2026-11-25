@@ -64,7 +64,7 @@ fi
 : "${STORAGE_ACCOUNT_NAME:=}" "${FABRIC_WORKSPACE_NAME:=WindFarmDigitalTwin}" "${FABRIC_LAKEHOUSE_NAME:=WindFarmLH}"
 # Fixed names from the deployment guide. Set them in front of the command if you chose others.
 : "${EVENTHOUSE_NAME:=WindFarmEH}" "${EVENTSTREAM_NAME:=es-windfarm-edge}" "${COMMAND_EVENTSTREAM_NAME:=WindFarmCommands}"
-NOTEBOOK_NAMES="01_load_reference_data 02_generate_history 03_refresh_forecast 04_question_bank 12_send_edge_command"
+NOTEBOOK_NAMES="01_load_reference_data 02_generate_history 03_refresh_forecast 04_question_bank 12_send_edge_command 13_command_center"
 # How long to wait for a stopped VM to bring the cluster back online, in minutes.
 : "${CONNECT_WAIT_MINUTES:=10}"
 # How often the uninstall is tried while Azure cannot reach the cluster, and the pause in between.

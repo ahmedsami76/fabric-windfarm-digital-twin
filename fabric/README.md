@@ -65,15 +65,17 @@ python3 tools/local-spark/run_phase2.py --lakehouse /tmp/lakehouse
 | `notebooks/09_build_data_agent.ipynb` | Runs the example queries, creates and publishes the data agent **WindFarmDataAgent** |
 | `notebooks/10_test_data_agent.ipynb` | Asks the agent the question bank and has each answer judged against the reference query |
 | `notebooks/11_build_ontology.ipynb` | Creates the ontology **WindFarmOntology** from its definition |
-| `notebooks/12_send_edge_command.ipynb` | Phase 5a: sends one operating command (curtail, release, stop, start, reset) to a turbine through the eventstream **WindFarmCommands**. Built by `tools/build-phase5.py` from `tools/edge_command.py` |
+| `notebooks/12_send_edge_command.ipynb` | Phase 5: sends one operating command (curtail, release, stop, start, reset) to a turbine through the eventstream **WindFarmCommands**. By hand in 5a; as the action **Curtail turbine** of the operations agent in 5b. Built by `tools/build-phase5.py` from `tools/edge_command.py` |
+| `notebooks/13_command_center.ipynb` | Phase 5: commands by hand in one place. One line per command, the turbines' state as a table, and after each send a wait until the telemetry shows it, with the seconds. For a person; the operations agent does not run it. Built by `tools/build-phase5.py` from `tools/edge_command.py` and `tools/command_center.py` |
 | `data-agent/` | What notebook 09 carries, for reading and for pasting by hand: instructions, descriptions, example queries, `agent-spec.json` |
 | `ontology/ontology-spec.json` | The ontology that notebook 11 carries, with its identifiers |
-| `operations-agent/` | Business goals and instructions to paste into the operations agent |
+| `operations-agent/` | Business goals and instructions to paste into the operations agent (Phase 3). For Phase 5b: `phase5b-agent-setup.txt`, the goals and instructions with the one rule that proposes a curtailment, and `phase5b-action.txt`, the action for adding it by hand. `bash infra/09-remediation-agent.sh` gives both to the agent through the Fabric API and keeps the agent's earlier definition under `operations-agent/saved/` |
 | `kql/05-agent-readiness.kql` | Column descriptions for the operations agent; optional table `GearboxVsFleetLive` |
+| `kql/06-remediation-readiness.kql` | Phase 5b: the table `GearboxDecisionLive` and its update policy. The gearbox readings of each running turbine with what limiting it would cost and what a gearbox costs |
 | `kql/93-data-agent-examples.kql` | The KQL example queries of the data agent |
 | `kql/94-twin-app-queries.kql` | The queries the functions of the Phase 4 app run, to run by hand |
 
-Everything in this table except `05-agent-readiness.kql` is generated. Change `tools/agent_spec.py` or `tools/build-phase3.py`, then run `python3 tools/build-phase3.py`.
+Everything in this table except `05-agent-readiness.kql` is generated. Change `tools/agent_spec.py` or `tools/build-phase3.py`, then run `python3 tools/build-phase3.py`. The files of Phase 5 come from `tools/edge_command.py` and `tools/remediation_spec.py` through `python3 tools/build-phase5.py`; the figures in them are read from `data/reference`.
 
 To check the T-SQL example queries against the reference queries of the question bank, after notebooks 01 and 02 have run in a stand-in folder (needs `pip install sqlglot duckdb`):
 

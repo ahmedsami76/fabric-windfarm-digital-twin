@@ -46,7 +46,7 @@ def test_notebook_is_current_and_its_cells_compile():
     kinds = ["pip" if source(c).startswith("%pip") else "parameters" if "parameters" in c["metadata"].get("tags", []) else "other" for c in code]
     assert kinds[:2] == ["pip", "parameters"], kinds
     assert kinds.count("parameters") == 1
-    assert re.fullmatch(r"%pip install -q azure-eventhub==\d+\.\d+\.\d+", source(code[0]))
+    assert re.fullmatch(r"%pip install -q azure-eventhub==\d+\.\d+\.\d+ websocket-client==\d+\.\d+\.\d+", source(code[0]))
 
 
 def test_notebook_carries_the_tested_code_and_keeps_no_key():
@@ -222,7 +222,8 @@ def test_the_cells_run_in_order_against_a_pretend_fabric(monkeypatch, capsys):
     eventhub.TransportType = types.SimpleNamespace(AmqpOverWebsocket="websocket")
     azure = types.ModuleType("azure")
     azure.eventhub = eventhub
-    for name, module in (("sempy", sempy), ("sempy.fabric", fabric), ("azure", azure), ("azure.eventhub", eventhub)):
+    for name, module in (("sempy", sempy), ("sempy.fabric", fabric), ("azure", azure), ("azure.eventhub", eventhub),
+                         ("websocket", types.ModuleType("websocket"))):
         monkeypatch.setitem(sys.modules, name, module)
     utils = types.SimpleNamespace(runtime=types.SimpleNamespace(context={"userName": "sami@contoso.example"}))
 
@@ -306,3 +307,26 @@ def test_dry_run_written_as_text_is_read_as_what_it_says():
     code = "\n".join(source(c) for c in cells() if c["cell_type"] == "code")
     assert "dry_run = as_flag(dry_run)" in code and "from_parameters(command, turbine" in code
     assert 'if command == "curtail"' not in code and "command in (" not in code.split("def from_parameters")[0].split("# The command, checked")[-1]
+
+
+def test_the_install_cell_brings_what_the_transport_needs():
+    """Obstacle A, 24 November: the send over port 443 needs websocket-client, which azure-eventhub does not install."""
+    code = [source(c) for c in cells() if c["cell_type"] == "code"]
+    assert any("TransportType.AmqpOverWebsocket" in text for text in code)
+    assert "websocket-client==" in code[0]
+
+
+def test_the_send_gets_as_far_as_the_network_with_the_pinned_libraries():
+    """The check that was missing: open the connection, not only build the client. The transport loads its
+    library when it connects, so a client that is only constructed proves nothing about it. Skipped where
+    the two libraries of the install cell are not installed."""
+    eventhub = pytest.importorskip("azure.eventhub")
+    pytest.importorskip("websocket")
+    producer = eventhub.EventHubProducerClient.from_connection_string(
+        "Endpoint=sb://127.0.0.1:9/;SharedAccessKeyName=k;SharedAccessKey=YWJj;EntityPath=es_1",
+        transport_type=eventhub.TransportType.AmqpOverWebsocket, retry_total=0)
+    with pytest.raises(Exception) as failure:
+        with producer:
+            producer.create_batch()
+    assert not isinstance(failure.value, ImportError), failure.value
+    assert "Please install" not in str(failure.value)

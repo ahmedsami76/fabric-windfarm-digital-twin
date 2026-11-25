@@ -2,7 +2,7 @@
 
 Phases 1 to 4 move data one way, from the turbines to Fabric. Phase 5 adds the way back: the operations agent proposes an action, an engineer approves it, and the edge applies it. Phase 5a builds and proves the path that command travels, alone, with a command you send by hand. Phase 5b puts the agent and the approval in front of it.
 
-**Status of this guide.** Written on 23 November 2026. **Nothing of it has run in Fabric or in Azure.** The simulator's side has been there since Phase 1 and is tested. Everything between the notebook and the simulator is built from the documentation and from the source of the Azure CLI extension, and four things in it are unproven: they are listed in [What was and was not tested](#what-was-and-was-not-tested), and each step says what to send me when it does not behave as written. That is the purpose of this step: to find out, on a path with one moving part at a time, before an agent is put on top.
+**Status of this guide.** Written on 23 November 2026. **First run on 24 November: the notebook found the eventstream, read where to write from the Fabric API, built the command, and stopped at the send**, because a library the send needs was not installed. That is corrected (obstacle A in [phase5-validation-log.md](phase5-validation-log.md)); nothing after the send has been seen yet. The simulator's side has been there since Phase 1 and is tested. Everything between the notebook and the simulator is built from the documentation and from the source of the Azure CLI extension, and four things in it are unproven: they are listed in [What was and was not tested](#what-was-and-was-not-tested), and each step says what to send me when it does not behave as written. That is the purpose of this step: to find out, on a path with one moving part at a time, before an agent is put on top.
 
 ## Contents
 
@@ -102,7 +102,7 @@ percent = 30
 duration = "10m"
 ```
 
-Leave them as they are for the first run and select **Run all**. The first code cell installs one library and takes about a minute.
+Leave them as they are for the first run and select **Run all**. The first code cell installs two libraries and restarts the kernel; that is expected.
 
 **Check.** The last code cell prints:
 
@@ -157,6 +157,7 @@ Follow the command along its way. Each row is one hop.
 | Step 1: `'consumerGroupId' is required in kafka source dataflow endpoint configuration` | The Azure CLI, before it sends the data flow | The endpoint was created without the consumer group. Send me the line of the script's output that starts with `consumer group:` |
 | Step 1: an error from `az iot ops dataflow apply` that names the source or the endpoint type | Azure IoT Operations refuses a Kafka source from the CLI | The second unproven thing. Send me the error. The same data flow can be created from a Kubernetes manifest, which Microsoft's page names as supported |
 | Step 4: `The Fabric API answered 4…` in the cell that starts with `# Where to write` | The notebook asks Fabric where to write | The message has Fabric's reason. 403: you need at least Contributor on the workspace |
+| Step 4: the last cell fails with `ImportError: Please install websocket-client library to use sync websocket transport` | The notebook is the one of 23 November, whose first cell installs one library | Import the current notebook, or change the first code cell to `%pip install -q azure-eventhub==5.15.1 websocket-client==1.9.2`, then **Run all** |
 | Step 4: the last cell fails with `ConnectError`, `AuthenticationError` or a timeout | The notebook cannot reach or may not write to the event hub of the eventstream | Send me the error. A workspace with outbound access protection blocks this call |
 | Step 4 says `Sent`, step 3 shows nothing | Between the eventstream and the edge | In the portal, open **WindFarmCommands**: the data preview of the stream shows the command if it arrived. If it is there, the data flow is not reading: the two commands below |
 | Step 3 shows the request and no response, or a response with `"ok": false` | The simulator refused it | The response carries the reason. A request that is not the JSON the notebook wrote was changed on the way: send me both messages |
@@ -197,7 +198,8 @@ The first lists both data flows, the one of Phase 1 and `fabric-to-windfarm-cont
 | What | How | Result |
 |---|---|---|
 | The command the notebook builds | 47 tests. Each of the five commands is handed to the simulator's handler of the control topic and applied: a curtailed turbine goes to `CURTAILED` at 1,260 kW and returns by itself, a stopped one to `MAINTENANCE`; its neighbour does not change. Fourteen commands that would do more than asked are refused before sending. The command may be written in any case, and a percentage or a duration as people write them (`30%`, `10 minutes`); a `Stop` keeps its end. Five mistakes planted in the code were each caught | Pass |
-| The notebook's cells | Executed top to bottom against stand-ins for the notebook utilities, the Fabric REST client and the event hub: the three calls it makes, the one event it sends, `dry_run`, and that no key reaches the output. The library calls checked against `azure-eventhub` 5.15.1 | Pass. A stand-in is my idea of the other side |
+| The notebook's cells | Executed top to bottom against stand-ins for the notebook utilities, the Fabric REST client and the event hub: the three calls it makes, the one event it sends, `dry_run`, and that no key reaches the output | Pass. A stand-in is my idea of the other side |
+| The send with the two pinned libraries | The real client opens a connection over WebSocket to an address where nothing listens, and has to fail on the network, not on a missing library. This check was added after the first run: before it I had built the client and never opened a connection | Pass |
 | `infra/08-create-command-path.sh` | 11 scenarios against a stand-in for the Fabric API and the data flow commands: first run, an eventstream made by hand, a refused definition, no destination, a connection that comes late or never, `--show`, `--remove`, no workspace | Pass |
 | The options of the `az iot ops` commands | Read in the source of the extension, version 2.11.2: `--group-id` on `create fabric-realtime`; and that `dataflow apply` accepts a Kafka endpoint as source when it has a consumer group and the other side is the local broker | As the script uses them |
 
@@ -207,14 +209,24 @@ The first lists both data flows, the one of Phase 1 and `fabric-to-windfarm-cont
 - An eventstream is created from a definition through `POST …/eventstreams`; the connection of a custom endpoint is read through `…/destinations/{id}/connection` and `…/sources/{id}/connection`.
 - A principal with Contributor on the workspace can read from a custom endpoint with Microsoft Entra ID authentication.
 
-**Unproven: what the first run decides**
+**Seen in the first run, 24 November 2026**
+
+From the export of the notebook after **Run all**, on Fabric Runtime with Python 3.13:
+
+- The install cell restarts the kernel, and the parameter cell below it keeps its values.
+- The Fabric API answers the notebook's three calls in the form the code expects: the list of eventstreams, the topology with a custom endpoint as source, and the connection of that source with namespace, event hub and key.
+- The eventstream `WindFarmCommands` exists and has a custom endpoint as its source. Whether the script made it from the definition or it was made by hand, I was not told.
+- The command was built as designed, with the name of the signed-in user as `requestedBy`.
+- The send stopped with `ImportError: Please install websocket-client library`: obstacle A.
+
+**Unproven: what the next run decides**
 
 1. **The eventstream definition.** The JSON of a custom endpoint node is not in the reference. If Fabric refuses it, the eventstream is made by hand in four steps and everything after it is unaffected.
 2. **A Kafka source through the CLI.** The extension's own check allows it; whether the service takes it from the CLI as it does from Bicep is not shown anywhere I could read.
 3. **The message on the way.** That the eventstream hands on the event unchanged, and that the data flow turns the Kafka record into an MQTT message whose payload is the JSON the notebook wrote. Microsoft lists a known issue with Kafka headers written by an AMQP sender when they are translated to MQTT; the notebook sends no properties of its own, and what the eventstream adds is not known.
 4. **The notebook's send.** That a Fabric notebook may open a connection to the event hub behind the eventstream on port 443, and that the connection string the API returns is accepted.
 
-Also not run: the topology answer of the Fabric API, whose shape the script and the notebook assume from the reference; and how long a command takes end to end.
+Also not known: whether the script's side of the Fabric API (the destination's connection, with the consumer group) answers as assumed, since the output of step 1 was not sent; and how long a command takes end to end.
 
 ## Remove Phase 5a
 

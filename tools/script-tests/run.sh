@@ -545,7 +545,7 @@ ra_run() { OUT="$(PATH="$HERE/stubs-agent:$PATH" FABRIC_API="http://127.0.0.1:9/
 
 ra_reset; ra_run
 check "agent, the Fabric API cannot be reached: says so, points to the way by hand, shows no token" 3 \
-  "Phase 5b instructions and the action" "ERROR: Could not reach the Fabric API at http://127.0.0.1:9/v1" "Do it by hand instead: step 3 of docs/13-deployment-guide-phase5b.md" \
+  "Phase 5b instructions and the action" "ERROR: Could not reach the Fabric API at http://127.0.0.1:9/v1" "Do it by hand instead: step 4 of docs/13-deployment-guide-phase5b.md" \
   "account get-access-token --resource https://api.fabric.microsoft.com --query accessToken --output tsv" "!S3cret"
 
 ra_reset; ra_run --show
@@ -564,7 +564,10 @@ ra_reset; ra_run --restore "$SCRATCH/nothing.json"
 check "agent --restore with a file that is not there: says where the saved ones are" 1 "No file .*nothing.json" "fabric/operations-agent/saved/" "!get-access-token"
 
 ra_reset; ra_run --delete
-check "agent, unknown option: refuses" 1 "Unknown option --delete. Use no option, --show, --rehearse TURBINE or --restore FILE." "!az account"
+check "agent, unknown option: refuses" 1 "Unknown option --delete. Use no option, --show, --save, --rehearse TURBINE or --restore FILE." "!az account"
+
+ra_reset; ra_run --save
+check "agent --save, the Fabric API cannot be reached: says so, writes no file" 3 "its definition to a file" "Could not reach the Fabric API" "!Saved" "!S3cret"
 
 ra_reset; : > "$STUB_DIR/signed_in_as"; ra_run
 check "agent, the Azure CLI is not signed in: says how to sign in" 1 "The Azure CLI is not signed in. Run: az login" "!get-access-token"

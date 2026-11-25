@@ -95,13 +95,19 @@ It waits. When a command arrives it prints two messages and ends: the request, a
 
 ## Step 4: Send a command
 
-**[Fabric]** Open **12_send_edge_command**. The first code cell holds the values:
+**[Fabric]** Open **12_send_edge_command**. The first code cell holds the values a caller sets, and the second what the notebook does:
 
 ```python
-command = "curtail"
 turbine = ""
 percent = 30
 duration = "10m"
+requested_by = ""
+```
+
+```python
+command = "curtail"
+reason = ""
+dry_run = False
 ```
 
 Set `turbine = "WT-07"`, leave the rest, and select **Run all**. The notebook names no turbine by itself, so that a run that forgets the turbine is refused instead of curtailing one. The last code cell installs two libraries the first time it runs in a session; that takes some seconds.
@@ -112,7 +118,7 @@ Set `turbine = "WT-07"`, leave the rest, and select **Run all**. The notebook na
 Sent: curtail for WT-07, request 3f9a1c0b7d2e, at 2026-11-23T16:00:00Z UTC.
 ```
 
-To see what would be sent without sending it, set `dry_run = True`.
+To see what would be sent without sending it, set `dry_run = True` in the second code cell.
 
 ## Step 5: See it take effect
 
@@ -138,14 +144,7 @@ TurbineTelemetry
 
 ## Step 6: Release
 
-The curtailment ends by itself after its ten minutes. To end it now, run the notebook again with:
-
-```python
-command = "release"
-turbine = "WT-07"
-```
-
-`percent` and `duration` are ignored for `release`. From the edge, without Fabric: `bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh release all`.
+The curtailment ends by itself after its ten minutes. To end it now, set `command = "release"` in the second code cell, leave `turbine = "WT-07"` in the first, and run the notebook again. `percent` and `duration` are ignored for `release`. Set the command back to `curtail` afterwards: since Phase 5b the operations agent runs this notebook, and it is meant to curtail. The command center below sends a release in one line, without touching this notebook. From the edge, without Fabric: `bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh release all`.
 
 ## The command center: commands by hand, from then on
 
@@ -242,7 +241,7 @@ The first lists both data flows, the one of Phase 1 and `fabric-to-windfarm-cont
 
 **The command is checked twice.** Once in the notebook, by code that the repository's tests hand to the simulator's own handler; and once by the simulator, which answers every request on `…/_control/response/{requestId}` with `ok` and the reason.
 
-**A turbine is always named.** The simulator reads a command without a turbine as "all twelve". The notebook requires a turbine and takes all of them only when the word `all` is written.
+**A turbine is always named.** The simulator reads a command without a turbine as "all twelve". Both notebooks require a turbine. The command center takes all of them when the word `all` is written; notebook 12, which the agent runs, acts on one turbine at a time and refuses `all`.
 
 **A curtailment always ends.** The notebook refuses `curtail` without a duration, so a forgotten command cannot hold a turbine down for good.
 

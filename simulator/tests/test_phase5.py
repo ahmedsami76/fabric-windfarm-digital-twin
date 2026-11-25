@@ -228,13 +228,17 @@ def test_the_cells_run_in_order_against_a_pretend_fabric(monkeypatch, capsys):
         monkeypatch.setitem(sys.modules, name, module)
     utils = types.SimpleNamespace(runtime=types.SimpleNamespace(context={"userName": "sami@contoso.example"}))
 
-    def run_all(overrides):
-        """Run all, the way Fabric does it for a caller: its values are set right after the parameter cell."""
+    def run_all(overrides, by_hand=()):
+        """Run all, the way Fabric does it for a caller: its values are set right after the parameter cell.
+        `by_hand` is what a person changed in a cell before running: pairs of text to find and to put."""
         namespace = {"notebookutils": utils}
         for cell in cells():
             if cell["cell_type"] != "code":
                 continue
-            exec("\n".join(line for line in source(cell).split("\n") if not line.startswith("%pip")), namespace)
+            text = source(cell)
+            for old, new in by_hand:
+                text = text.replace(old, new)
+            exec(text, namespace)
             if "parameters" in cell["metadata"].get("tags", []):
                 namespace.update(overrides)
         return namespace
@@ -250,9 +254,9 @@ def test_the_cells_run_in_order_against_a_pretend_fabric(monkeypatch, capsys):
     assert f"request {command['requestId']}" in out and "Writes to ns.servicebus.windows.net, event hub es_1" in out
     assert "S3cr3t" not in out and "SharedAccessKey" not in out
 
-    # dry_run sends nothing.
+    # dry_run sends nothing. A person sets it in the second code cell; it is not a value a caller can pass.
     sent.clear()
-    run_all({"turbine": "WT-07", "dry_run": True})
+    run_all({"turbine": "WT-07"}, by_hand=[("dry_run = False", "dry_run = True")])
     assert sent == [] and "nothing was sent" in capsys.readouterr().out
 
     # As delivered, the notebook names no turbine and sends nothing: a caller that forgets the turbine
@@ -261,13 +265,36 @@ def test_the_cells_run_in_order_against_a_pretend_fabric(monkeypatch, capsys):
         run_all({})
     assert type(refused.value).__name__ == "CommandError" and sent == []
 
-    # What the operations agent passes, as text: the action's five parameters.
+    # What the operations agent passes, as text: the action's four parameters.
     sent.clear()
-    run_all({"command": "curtail", "turbine": "WT-03", "percent": "30", "duration": "60m",
+    run_all({"turbine": "WT-03", "percent": "30", "duration": "60m",
              "requested_by": "operations agent WindFarmGearboxWatch, approved in Teams"})
     agent_command = json.loads(sent[0].body)
     assert (agent_command["turbine"], agent_command["percent"], agent_command["duration"]) == ("WT-03", 30.0, "60m")
     assert agent_command["requestedBy"].startswith("operations agent")
+
+    # Fabric offers every name of the parameter cell to the agent's action (seen on 24 November 2026), so the
+    # command is not in that cell. A caller that passes one anyway, with a dry run, a reason and another
+    # eventstream, still gets a curtailment of the turbine it named, sent to the eventstream of this notebook.
+    sent.clear()
+    asked.clear()
+    run_all({"turbine": "WT-03", "percent": "30", "duration": "60m", "command": "stop", "reason": "maintenance",
+             "dry_run": "True", "EVENTSTREAM": "SomethingElse"})
+    forced = json.loads(sent[0].body)
+    assert forced["command"] == "curtail" and forced["turbine"] == "WT-03" and "reason" not in forced and "note" not in forced
+    assert asked[0].endswith("/eventstreams") and len(sent) == 1
+    parameter_cell = next(source(c) for c in cells() if "parameters" in c["metadata"].get("tags", []))
+    assert re.findall(r"^([A-Za-z_]+) = ", parameter_cell, flags=re.M) == ["turbine", "percent", "duration", "requested_by"]
+
+    # One turbine at a time: as the agent's action this notebook does not take the word all.
+    sent.clear()
+    with pytest.raises(Exception, match="one turbine at a time"):
+        run_all({"turbine": "all", "percent": "30", "duration": "60m"})
+    assert sent == []
+
+    # By hand, a person may still send another command with this notebook, by changing the second code cell.
+    run_all({"turbine": "WT-07"}, by_hand=[('command = "curtail"', 'command = "release"')])
+    assert json.loads(sent[0].body)["command"] == "release"
 
 
 
@@ -459,8 +486,8 @@ def test_the_agent_is_told_only_of_columns_that_exist_and_of_parameters_the_note
     # The parameters of the action are variables of the notebook's parameter cell, and the instructions use them.
     parameter_cell = next(source(c) for c in cells() if "parameters" in c["metadata"].get("tags", []))
     assigned = set(re.findall(r"^([a-zA-Z_]+) = ", parameter_cell, flags=re.M))
-    for name, _ in remediation.PARAMETERS:
-        assert name in assigned, name
+    # The same names, no more and no fewer: Fabric makes every name of that cell a parameter of the action.
+    assert assigned == {name for name, _ in remediation.PARAMETERS}
     for name in ("turbine", "percent", "duration"):
         assert f"as '{name}'" in setup, name
     action = (ROOT / "fabric" / "operations-agent" / "phase5b-action.txt").read_text(encoding="utf-8")

@@ -220,25 +220,26 @@ def _wrap(text: str, width: int, indent: str) -> str:
 
 def action_text() -> str:
     lines = [
-        "The action of the operations agent, for adding it by hand (guide, step 3, 'By hand').",
+        "The action of the operations agent, for adding it by hand (guide, step 4, the part headed 'By hand').",
         "bash infra/09-remediation-agent.sh enters the same values through the Fabric API.",
         "",
-        "In Agent setup: Add action, then Fabric item, and browse to the notebook.",
+        "In Agent setup: Add action, then Fabric item, and browse to the notebook. The dialog 'Add action' opens.",
         "",
         f"Fabric item:         the notebook {NOTEBOOK}, in this workspace",
         f"Action name:         {ACTION_NAME}",
         "Action description:  " + _wrap(action_description(), 96, " " * 21),
         "",
-        "Parameters, each with its name exactly as written, in small letters (they are the names in the",
-        "notebook's parameter cell; a name written differently reaches nothing and the command is refused):",
+        "Parameters. Fabric lists them by itself, from the notebook's first code cell, each with the type string.",
+        "There must be exactly these four. Enter the description of each:",
         "",
     ]
     for name, text in PARAMETERS:
         lines.append(f"  {name:<13} {text}")
     lines += [
         "",
-        "Add no other parameter. Without 'command' the notebook's own value applies, which is curtail: the",
-        "action can limit a turbine and cannot stop one.",
+        "If the list shows more rows (command, reason, dry_run, EVENTSTREAM), the notebook in the workspace is",
+        "an older one: cancel, replace the notebook (guide, step 2) and add the action again. The command is not",
+        "a parameter on purpose: the action can limit a turbine and cannot stop one.",
     ]
     return "\n".join(lines) + "\n"
 

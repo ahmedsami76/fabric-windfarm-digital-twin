@@ -50,7 +50,11 @@ BRING = f"""def bring(module, pin):
         return importlib.import_module(module)"""
 
 # (kind, source, tags). The cell tagged "parameters" is the one a job, a pipeline or the operations
-# agent overrides.
+# agent overrides. It holds the four values the agent's action passes and nothing else: when an action
+# is added to an operations agent, Fabric lists every name assigned in that cell as a parameter of the
+# action, none can be taken off the list, and each could then be set by the agent or by whoever edits
+# the values before approving (seen on 24 November 2026). So the command itself stands in the cell
+# after it, which runs after a caller's values are set and cannot be overridden by them.
 #
 # There is no %pip cell. The magic is switched off when a notebook runs as a job ("%pip magic command
 # is disabled"), and the action of the operations agent runs it as a job. The send cell installs the two
@@ -61,20 +65,23 @@ CELLS = [
 Phase 5. Sends **one operating command** to a turbine of Northwind Ridge: it writes the command to the eventstream `{EVENTSTREAM}`, from where a data flow of Azure IoT Operations carries it to the control topic on the edge.
 
 - The control topic takes five commands: `curtail`, `release`, `stop`, `start`, `reset`. It cannot inject a fault.
-- By hand: set the values in the first code cell, `turbine` first, then **Run all**. With `dry_run = True` the notebook builds and shows the command and sends nothing.
-- As a job: the operations agent of Phase 5b runs this notebook as its action `Curtail turbine` and sets `turbine`, `percent`, `duration` and `requested_by`. A run that names no turbine is refused.
+- As a job: the operations agent of Phase 5b runs this notebook as its action `Curtail turbine` and sets the four values of the first code cell: `turbine`, `percent`, `duration`, `requested_by`. A run that names no turbine is refused. The command is not among them: as a job this notebook curtails and does nothing else.
+- By hand: set `turbine` in the first code cell, then **Run all**. The second code cell holds the command and `dry_run`; with `dry_run = True` the notebook builds and shows the command and sends nothing. For sending commands by hand as a habit there is `13_command_center`.
 - Before the first run: `bash infra/08-create-command-path.sh` on the workstation (guide: `docs/12-deployment-guide-phase5a.md`).
 
 The notebook reads where to write from the Fabric API each time it runs. No key is kept in it.""", ()),
-    ("code", f"""# Parameters. A job, a pipeline or the operations agent can set these (this is the parameter cell).
+    ("code", """# Parameters: what a job or the operations agent sets. These four and nothing else (this is the parameter cell).
+turbine = ""               # WT-01 to WT-12. Empty on purpose: a command names its turbine
+percent = 30               # the share of rated power the turbine may still produce
+duration = "10m"           # how long the limit lasts: for example 90s, 10m, 1h
+requested_by = ""          # who asked for it; empty means the user who runs the notebook""", ("parameters",)),
+    ("code", f"""# Not parameters, on purpose. This cell runs after a caller's values are set, so no caller can change
+# what stands here: run as a job, this notebook curtails and does nothing else.
+# By hand you may change these for one run. For other commands by hand, 13_command_center is the better place.
 command = "curtail"        # curtail, release, stop, start, reset
-turbine = ""               # WT-01 to WT-12, or the word all. Empty on purpose: a command names its turbine
-percent = 30               # curtail only: the share of rated power the turbine may still produce
-duration = "10m"           # curtail and stop: for example 90s, 10m, 1h
 reason = ""                # stop: operator or maintenance; otherwise a note that travels with the command
-requested_by = ""          # who asked for it; empty means the user who runs the notebook
 dry_run = False            # True: build and show the command, send nothing
-EVENTSTREAM = "{EVENTSTREAM}\"""", ("parameters",)),
+EVENTSTREAM = "{EVENTSTREAM}\"""", ()),
     ("code", GENERATED + "\n__MODULE__", ()),
     ("code", """# The command, checked before anything is installed or sent.
 if not requested_by:
@@ -84,6 +91,8 @@ if not requested_by:
         requested_by = ""
 dry_run = as_flag(dry_run)
 cmd = from_parameters(command, turbine, percent=percent, duration=duration, reason=reason, requested_by=requested_by)
+if cmd["turbine"] == "all":
+    raise CommandError("This notebook acts on one turbine at a time. For all twelve at once, send from 13_command_center.")
 print(json.dumps(cmd, indent=1))""", ()),
     ("code", """# Where to write: the custom endpoint that is the source of the eventstream, asked from the Fabric API.
 import sempy.fabric as fabric

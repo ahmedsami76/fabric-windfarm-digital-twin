@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -48,7 +49,12 @@ def phase3_document() -> dict:
             "messageDestination": {"kind": "Recipient", "recipient": "admin@contoso.example"},
             "identity": {"sponsor": "admin"},
         },
-        "playbook": {"rules": ["three rules made from the Phase 3 instructions"]},
+        # What is known of a playbook the portal generated, from Fabric's error message of 24 November 2026:
+        # it has "ontologyDefinitions" with classes, and rules that name a class. The fields inside are a guess.
+        "playbook": {"ontologyDefinitions": [{"name": "TurbineRunSample"}, {"name": "TurbineRunSample"}, {"name": "TurbineRunSample"}],
+                     "rules": [{"name": "Rule Gearbox Vibration Early Warning", "class": "TurbineRunSample"},
+                               {"name": "Rule Gearbox Vibration Alarm Level", "class": "TurbineRunSample"},
+                               {"name": "Rule Gearbox Oil Temperature Early Warning", "class": "TurbineRunSample"}]},
         "shouldRun": True,
     }
 
@@ -70,6 +76,7 @@ class Stand:
         self.long_running = True          # getDefinition and updateDefinition answer 202 first
         self.specific_paths = True        # False: only the generic /items/{id}/... paths exist
         self.refuse_update = None         # (status, errorCode, message)
+        self.refuse_playbook = False      # as Fabric did on 24 November 2026: a class defined more than once is refused
         self.throttle = 0                 # this many requests are answered 429 first
         self.job_states = ["NotStarted", "InProgress", "InProgress", "Completed"]
         self.job_failure = None
@@ -135,7 +142,14 @@ def fabric(tmp_path):
                         return self._send(status, {"errorCode": code, "message": message, "requestId": "r-77"})
                     parts = body["definition"]["parts"]
                     assert [p["path"] for p in parts] == [stand.part] and parts[0]["payloadType"] == "InlineBase64"
-                    stand.document = json.loads(base64.b64decode(parts[0]["payload"]))
+                    written = json.loads(base64.b64decode(parts[0]["payload"]))
+                    classes = [c.get("name") for c in (written.get("playbook") or {}).get("ontologyDefinitions", [])]
+                    if stand.refuse_playbook and len(classes) != len(set(classes)):
+                        return self._send(400, {"errorCode": "InvalidInput", "requestId": "r-9a", "message": (
+                            "The definition is invalid: rule 'Rule Gearbox Vibration Early Warning' monitors class 'TurbineRunSample', but "
+                            "'playbook.ontologyDefinitions' defines class 'TurbineRunSample' 3 times. Keep a single entry for class "
+                            "'TurbineRunSample' and for each of its properties, then try again.")})
+                    stand.document = written
                     return self._operation(base, None)
             if (method, path) == ("POST", f"{ws}/items/{NOTEBOOK}/jobs/instances?jobType=RunNotebook"):
                 stand.polls = 0
@@ -199,10 +213,30 @@ def test_show_says_what_the_agent_is_and_changes_nothing(fabric, capsys):
     assert "Operations agent WindFarmGearboxWatch" in text and "Running: yes" in text
     assert "Data source kusto1: KustoDatabase WindFarmEH" in text
     assert "Messages go to: admin@contoso.example" in text and "Actions: none" in text
+    assert "playbook.ontologyDefinitions: 3 entries (TurbineRunSample, TurbineRunSample, TurbineRunSample)" in text
+    assert "playbook.rules: 3 entries (Rule Gearbox Vibration Early Warning, " in text
     assert "The instructions are those of Phase 3" in text
     assert "There is no action named 'Curtail turbine'" in text
     assert not writes(fabric) and not fabric.saved.exists()
     assert all(method == "GET" or path.endswith("/getDefinition") for method, path, _ in fabric.requests)
+
+
+def test_save_writes_the_definition_to_a_file_and_changes_nothing(fabric, capsys):
+    code, text = run_tool(fabric, "save", capsys=capsys)
+    assert code == 0, text
+    saved = list(fabric.saved.glob("WindFarmGearboxWatch-*.json"))
+    assert len(saved) == 1 and f"Saved the agent's definition: {saved[0]}" in text and "No key and no token." in text
+    kept = json.loads(saved[0].read_text(encoding="utf-8"))
+    assert kept["part"] == "OperationsAgentV1.json" and kept["document"] == phase3_document()      # readable, without decoding
+    assert tool.decode_definition(kept["response"]) == ("OperationsAgentV1.json", phase3_document())
+    assert "The instructions are those of Phase 3" in text and not writes(fabric) and TOKEN not in saved[0].read_text()
+    # A second save in the same second does not write over the first: the earlier file is the backup.
+    fixed = datetime(2026, 11, 25, 4, 8, 34, tzinfo=timezone.utc)
+    session = tool.Session(tool.Fabric(TOKEN, fabric.env["FABRIC_API"], poll_seconds=0), fabric.env)
+    first = tool.keep(session, AGENT, {"n": 1}, "p.json", {"n": 1}, now=fixed)
+    second = tool.keep(session, AGENT, {"n": 2}, "p.json", {"n": 2}, now=fixed)
+    assert first.name == "WindFarmGearboxWatch-20261125T040834Z.json" and second.name == "WindFarmGearboxWatch-20261125T040834Z-2.json"
+    assert json.loads(first.read_text())["document"] == {"n": 1} and json.loads(second.read_text())["document"] == {"n": 2}
 
 
 # ----------------------------------------------------------------------------------------------- apply
@@ -356,7 +390,7 @@ def test_the_rehearsal_runs_the_notebook_as_the_action_does(fabric, capsys):
     exec("".join(cells[0]["source"]), namespace)
     assert "parameters" in cells[0]["metadata"]["tags"] and set(parameters) <= set(namespace)
     namespace.update({name: p["value"] for name, p in parameters.items()})
-    for cell in cells[1:3]:
+    for cell in cells[1:4]:                 # what a caller cannot set, the tested code, the command
         exec("".join(cell["source"]), namespace)
     command = namespace["cmd"]
     assert (command["command"], command["turbine"], command["percent"], command["duration"]) == ("curtail", "WT-07", 30.0, "2m")
@@ -421,17 +455,42 @@ esac
     saved = next(fabric.saved.glob("*.json"))
     code, text = script("--restore", str(saved))
     assert code == 0 and fabric.document == phase3_document(), text
+    code, text = script("--save")
+    assert code == 0 and "Saved the agent's definition: " in text and len(list(fabric.saved.glob("*.json"))) == 2, text
+    # Obstacle C, 24 November: Fabric refuses to take back a playbook its own portal generated. The script says so,
+    # and says how to go back by hand.
+    fabric.refuse_playbook = True
+    code, text = script("--restore", str(saved))
+    assert code == 3 and "defines class 'TurbineRunSample' 3 times" in text, text
+    assert "The saved definition was not put back. The agent is as it was." in text and "fabric/operations-agent/agent-setup.txt" in text
+    fabric.refuse_playbook = False
     # Fabric refuses the change: the script says how to do it by hand.
     fabric.refuse_update = (403, "InsufficientPrivileges", "The caller does not have sufficient permissions")
     code, text = script()
-    assert code == 3 and "InsufficientPrivileges" in text and "Do it by hand instead: step 3 of docs/13-deployment-guide-phase5b.md" in text
+    assert code == 3 and "InsufficientPrivileges" in text and "Do it by hand instead: step 4 of docs/13-deployment-guide-phase5b.md" in text
     assert TOKEN not in (tmp_path / "az.log").read_text()
+
+
+def test_the_hints_name_the_step_of_the_guide_that_holds_the_way_by_hand():
+    """Obstacle B, 24 November: the script sent the user to step 3, which is the rehearsal. The steps were
+    renumbered after the hint was written, and nothing compared the two."""
+    guide = (ROOT / "docs" / "13-deployment-guide-phase5b.md").read_text(encoding="utf-8")
+    before = guide[:guide.index("\n### By hand\n")]
+    step = re.findall(r"^## Step (\d+): ", before, flags=re.M)[-1]
+    script = (ROOT / "infra" / "09-remediation-agent.sh").read_text(encoding="utf-8")
+    action = (ROOT / "fabric" / "operations-agent" / "phase5b-action.txt").read_text(encoding="utf-8")
+    assert re.findall(r"step (\d+) of (?:docs/13-deployment-guide-phase5b\.md|the guide)", script) == [step, step]
+    replace = re.search(r"^## Step (\d+): Replace the notebook$", guide, flags=re.M).group(1)
+    assert re.findall(r"guide, step (\d+)", action) == [step, replace]      # by hand; and where the notebook is replaced
+    # And every "step N" of the guide that says what a step does points at a step with that subject.
+    for number, subject in re.findall(r"\[Step (\d+): ([^\]]+)\]\(#", guide):
+        assert f"## Step {number}: {subject}" in guide
 
 
 def test_wrong_arguments_are_refused_without_a_call(fabric, capsys):
     for argv in ([], ["delete"], ["restore"], ["rehearse"], ["show", "extra"]):
         assert tool.main(argv, env=fabric.env, out=io.StringIO()) == 2
-    assert "Use: show, apply, restore FILE, or rehearse TURBINE." in capsys.readouterr().err
+    assert "Use: show, save, apply, restore FILE, or rehearse TURBINE." in capsys.readouterr().err
     assert fabric.requests == []
 
 
@@ -462,8 +521,9 @@ def test_the_action_cannot_stop_a_turbine():
     """The action has no parameter for the command, so the notebook's own value applies, and that is curtail."""
     names = [name for name, _ in spec.PARAMETERS]
     assert "command" not in names and "reason" not in names and "dry_run" not in names
-    cell = "".join(next(c for c in notebook_cells() if c["cell_type"] == "code")["source"])
-    assert 'command = "curtail"' in cell and 'turbine = ""' in cell
+    code = ["".join(c["source"]) for c in notebook_cells() if c["cell_type"] == "code"]
+    assert 'turbine = ""' in code[0] and "command" not in code[0].replace("a command names its turbine", "")
+    assert 'command = "curtail"' in code[1] and 'dry_run = False' in code[1]      # set after a caller's values
     # Whatever is typed into the four parameters, the command that is built is a curtailment of one turbine, or nothing.
     for turbine, percent, duration in (("WT-03", "30", "60m"), ("WT-03", "0", "1h"), ("stop WT-03", "30", "60m"), ("all", "30", "60m"),
                                        ("WT-03", "stop", "60m"), ("WT-03", "30", "forever")):

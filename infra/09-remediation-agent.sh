@@ -4,8 +4,9 @@
 #
 #   bash infra/09-remediation-agent.sh                    give the agent its Phase 5b instructions and the action
 #   bash infra/09-remediation-agent.sh --show             say how the agent is set up; change nothing
+#   bash infra/09-remediation-agent.sh --save             the same, and write the agent's definition to a file
 #   bash infra/09-remediation-agent.sh --rehearse WT-07   run the action's notebook as a job, the way the agent does
-#   bash infra/09-remediation-agent.sh --restore FILE     put back a definition saved by an earlier run
+#   bash infra/09-remediation-agent.sh --restore FILE     put back a saved definition, if Fabric accepts it
 #
 # What the first form does, in this order:
 #   1. Reads the definition of the operations agent WindFarmGearboxWatch from the Fabric API and
@@ -31,12 +32,13 @@ MODE="apply"; ARGUMENT=""
 case "${1:-}" in
   "") ;;
   --show) MODE="show" ;;
+  --save) MODE="save" ;;
   --rehearse) MODE="rehearse"; ARGUMENT="${2:-}"
     [[ -n "$ARGUMENT" ]] || die "Name the turbine: bash infra/09-remediation-agent.sh --rehearse WT-07" ;;
   --restore) MODE="restore"; ARGUMENT="${2:-}"
     [[ -n "$ARGUMENT" ]] || die "Name the file: bash infra/09-remediation-agent.sh --restore fabric/operations-agent/saved/FILE.json"
     [[ -f "$ARGUMENT" ]] || die "No file $ARGUMENT. The saved definitions are in fabric/operations-agent/saved/." ;;
-  *) die "Unknown option $1. Use no option, --show, --rehearse TURBINE or --restore FILE." ;;
+  *) die "Unknown option $1. Use no option, --show, --save, --rehearse TURBINE or --restore FILE." ;;
 esac
 
 need az python3
@@ -56,6 +58,7 @@ fi
 case "$MODE" in
   apply) log "Operations agent $OPERATIONS_AGENT_NAME: Phase 5b instructions and the action" ;;
   show) log "Operations agent $OPERATIONS_AGENT_NAME: how it is set up" ;;
+  save) log "Operations agent $OPERATIONS_AGENT_NAME: how it is set up, and its definition to a file" ;;
   rehearse) log "Rehearsal: notebook 12_send_edge_command as a job, for $ARGUMENT" ;;
   restore) log "Operations agent $OPERATIONS_AGENT_NAME: putting back $ARGUMENT" ;;
 esac
@@ -69,10 +72,17 @@ fi
 
 if [[ "$RC" -eq 3 && "$MODE" == "apply" ]]; then
   warn "The agent was not changed through the Fabric API."
-  info "Do it by hand instead: step 3 of docs/13-deployment-guide-phase5b.md, 'By hand'. It takes about five minutes."
+  info "Do it by hand instead: step 4 of docs/13-deployment-guide-phase5b.md, the part headed 'By hand'. It takes about five minutes."
   info "The texts to paste are fabric/operations-agent/phase5b-agent-setup.txt and phase5b-action.txt."
 elif [[ "$RC" -eq 1 && "$MODE" == "apply" ]]; then
   warn "The definition read back differs from what was written (the lines under 'Differs from Phase 5b')."
-  info "Open the agent in the portal and compare; step 3 of the guide, 'By hand', says what each field should hold."
+  info "Open the agent in the portal and compare; step 4 of the guide, the part headed 'By hand', says what each field should hold."
+fi
+if [[ "$RC" -eq 3 && "$MODE" == "restore" ]]; then
+  warn "The saved definition was not put back. The agent is as it was."
+  info "Fabric checks a definition when it is written. A playbook that the portal generated can fail that check"
+  info "(seen on 24 November 2026: an object of the playbook defined once for each rule)."
+  info "To go back by hand: open the agent, paste the instructions you want into Agent setup, remove the action"
+  info "if you do not want it, and generate the playbook. The Phase 3 text is fabric/operations-agent/agent-setup.txt."
 fi
 exit "$RC"

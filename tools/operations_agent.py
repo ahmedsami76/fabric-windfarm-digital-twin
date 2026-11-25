@@ -6,9 +6,11 @@ CLI and hands it over in the environment variable FABRIC_TOKEN. The token is nev
 sent to the Fabric API only.
 
     show                 how the agent is set up now, and what differs from Phase 5b. Changes nothing
+    save                 the same, and the agent's definition written to a file. Changes nothing in Fabric
     apply                save the agent's definition to a file, then give it the Phase 5b instructions
                          and the action 'Curtail turbine'. Leaves the agent stopped
-    restore FILE         put a saved definition back
+    restore FILE         put a saved definition back. Fabric checks what it is given, and on 24 November 2026
+                         it refused a playbook that its own portal had generated; see the guide
     rehearse TURBINE     run notebook 12_send_edge_command as a job with the parameters the action
                          passes, as text, and wait for the result
 
@@ -16,11 +18,13 @@ What this rests on (Microsoft Learn, read on 24 November 2026):
   Items - Get Operations Agent Definition: POST workspaces/{id}/operationsAgents/{id}/getDefinition,
       long running, user identities only.
   Operations agent definition: one part with {"configuration": {"instructions", "dataSources",
-      "actions", "messageDestination"}, "playbook": {}, "shouldRun"}; an action of kind FabricJobAction
+      "actions", "messageDestination"}, "playbook", "shouldRun"}; an action of kind FabricJobAction
       has a connection {"jobArtifactId", "jobWorkspaceId", "itemType", "jobType"} and parameters
       [{"name", "description"}]. The article names the part Configurations.json and the sample of the
       API names it OperationsAgentV1.json, so the part is found by its content and written back under
-      the name it came with.
+      the name it came with. The article calls the playbook "reserved for future expansion"; what Fabric
+      returns for an agent made in the portal holds its rules and the objects they watch
+      (playbook.ontologyDefinitions), seen in an error message of 24 November 2026.
   Job Scheduler - Run On Demand Item Job: POST workspaces/{id}/items/{id}/jobs/instances?jobType=RunNotebook
       with {"executionData": {"parameters": {name: {"value", "type"}}}}; 202 with a Location to poll.
 """
@@ -311,7 +315,16 @@ def describe(document: dict, path: str, names: dict) -> list[str]:
         parameters = ", ".join(str(p.get("name")) for p in action.get("parameters") or [] if isinstance(p, dict)) or "none"
         lines.append(f"Action {key}: '{action.get('displayName')}' ({action.get('kind')}){target}. Parameters: {parameters}")
     playbook = document.get("playbook")
-    lines.append("Playbook in the definition: " + ("empty" if not playbook else f"{len(json.dumps(playbook))} characters"))
+    if not playbook:
+        lines.append("Playbook in the definition: empty")
+    else:
+        lines.append(f"Playbook in the definition: {len(json.dumps(playbook))} characters")
+        if isinstance(playbook, dict):
+            for key, value in playbook.items():     # its form is not published: say what is there, assume nothing
+                size = f"{len(value)} entries" if isinstance(value, (list, dict)) else str(value)[:60]
+                names = [str(v.get("name") or v.get("displayName")) for v in (value if isinstance(value, list) else [])
+                         if isinstance(v, dict) and (v.get("name") or v.get("displayName"))]
+                lines.append(f"  playbook.{key}: {size}" + (f" ({', '.join(names[:8])})" if names else ""))
     return lines
 
 
@@ -401,15 +414,37 @@ def show(session: Session, out) -> int:
     return 0
 
 
+def keep(session: Session, agent_id: str, response: dict, path: str, document: dict, now=None) -> Path:
+    """Write the definition to a file. "response" is what Fabric returned and what restore writes back;
+    "part" and "document" are the same definition decoded, for reading."""
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    session.save_dir.mkdir(parents=True, exist_ok=True)
+    saved, number = session.save_dir / f"{session.agent_name}-{stamp}.json", 1
+    while saved.exists():           # two saves within a second: the earlier one is the one worth keeping
+        number += 1
+        saved = session.save_dir / f"{session.agent_name}-{stamp}-{number}.json"
+    saved.write_text(json.dumps({"agent": session.agent_name, "agentId": agent_id, "workspaceId": session.workspace_id,
+                                 "savedAt": stamp, "part": path, "document": document, "response": response},
+                                indent=1, ensure_ascii=False), encoding="utf-8")
+    return saved
+
+
+def save(session: Session, out, now=None) -> int:
+    agent_id = session.agent_id()
+    response = session.read(agent_id)
+    path, document = decode_definition(response)
+    saved = keep(session, agent_id, response, path, document, now)
+    report(session, agent_id, path, document, out)
+    print(f"Saved the agent's definition: {_shown(saved)}", file=out)
+    print("It holds the instructions, the actions, the playbook, item ids and the recipient's sign-in address. No key and no token.", file=out)
+    return 0
+
+
 def apply(session: Session, out, now=None) -> int:
     agent_id, notebook_id = session.agent_id(), session.notebook_id()
     response = session.read(agent_id)
     path, document = decode_definition(response)
-    stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
-    session.save_dir.mkdir(parents=True, exist_ok=True)
-    saved = session.save_dir / f"{session.agent_name}-{stamp}.json"
-    saved.write_text(json.dumps({"agent": session.agent_name, "agentId": agent_id, "workspaceId": session.workspace_id,
-                                 "savedAt": stamp, "response": response}, indent=1), encoding="utf-8")
+    saved = keep(session, agent_id, response, path, document, now)
     print(f"Saved the agent's definition as it was: {_shown(saved)}", file=out)
     was_running = bool(document.get("shouldRun"))
     session.write(agent_id, path, with_remediation(document, notebook_id, session.workspace_id))
@@ -422,7 +457,8 @@ def apply(session: Session, out, now=None) -> int:
         print("The agent was running and is now stopped.", file=out)
     print("Next, in the portal: open the agent, look at the instructions and the action, generate the playbook, "
           "compare its rule with the guide, and select Start.", file=out)
-    print(f"To go back: bash infra/09-remediation-agent.sh --restore {_shown(saved)}", file=out)
+    print(f"To go back: bash infra/09-remediation-agent.sh --restore {_shown(saved)} (Fabric may refuse a playbook "
+          "the portal generated; then go back by hand, as the guide says).", file=out)
     return 1 if found else 0
 
 
@@ -492,8 +528,8 @@ def _shown(path: Path) -> str:
 
 def main(argv, env=None, out=sys.stdout) -> int:
     env = os.environ if env is None else env
-    usage = "Use: show, apply, restore FILE, or rehearse TURBINE."
-    if not argv or argv[0] not in ("show", "apply", "restore", "rehearse") or len(argv) != (2 if argv[0] in ("restore", "rehearse") else 1):
+    usage = "Use: show, save, apply, restore FILE, or rehearse TURBINE."
+    if not argv or argv[0] not in ("show", "save", "apply", "restore", "rehearse") or len(argv) != (2 if argv[0] in ("restore", "rehearse") else 1):
         print(usage, file=sys.stderr)
         return 2
     try:
@@ -502,6 +538,8 @@ def main(argv, env=None, out=sys.stdout) -> int:
         session = Session(fabric, env)
         if argv[0] == "show":
             return show(session, out)
+        if argv[0] == "save":
+            return save(session, out)
         if argv[0] == "apply":
             return apply(session, out)
         if argv[0] == "restore":

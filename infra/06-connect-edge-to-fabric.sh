@@ -19,7 +19,7 @@ HOST="$EVENTSTREAM_BOOTSTRAP_SERVER"
 
 require_user_login
 az account set --subscription "$SUBSCRIPTION_ID"
-az extension add --upgrade --yes --name azure-iot-ops
+az extension show --name azure-iot-ops --output none 2>/dev/null || az extension add --yes --name azure-iot-ops
 
 log "Creating data flow endpoint $ENDPOINT_NAME -> $HOST (system-assigned managed identity)"
 az iot ops dataflow endpoint create fabric-realtime \

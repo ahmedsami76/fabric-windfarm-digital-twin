@@ -37,6 +37,31 @@ export const STATE_COLOR: Record<TurbineState, string> = {
   UNKNOWN: '#6b7682',
 };
 
+/** Colour of a gearbox condition: none (the white of the nacelle), early warning, alarm level. */
+export const LEVEL_COLOR: readonly [string, string, string] = ['#e9ecee', '#ffb224', '#ff4d5e'];
+
+/**
+ * The colour of the wide halo on the ground. It carries the condition of the gearbox when there is
+ * one to show, amber for the early warning and red at the alarm level, and the colour of the state
+ * otherwise. The narrow ring inside it always carries the state. So a turbine that still runs with
+ * its gearbox at the alarm level shows a green ring in a red halo: running, and in trouble.
+ */
+export function haloColor(state: TurbineState, level: number): string {
+  if (level >= 2) return LEVEL_COLOR[2];
+  if (level === 1) return LEVEL_COLOR[1];
+  return STATE_COLOR[state];
+}
+
+/** How strongly the halo shows, between 0 and 1. A fault pulses; `pulse` runs from 0 to 1. */
+export function haloOpacity(state: TurbineState, level: number, selected: boolean, hovered: boolean, pulse: number): number {
+  if (state === 'FAULT') return 0.1 + 0.4 * pulse;
+  if (level >= 2) return selected ? 0.5 : 0.4;
+  if (level === 1) return selected ? 0.42 : 0.28;
+  if (selected) return 0.38;
+  if (state === 'DERATED') return 0.24;
+  return hovered ? 0.18 : 0;
+}
+
 /** A blade along +y: round at the root, widest at a fifth of its length, thin and narrow at the tip. */
 function bladeGeometry(): THREE.BufferGeometry {
   const stations = 18;
@@ -117,8 +142,9 @@ export interface TurbineView {
 }
 
 /**
- * `ring` and `halo` are the two flat shapes on the ground around the base that carry the colour of the
- * state. The caller makes them to fit the ground and they are not scaled with the turbine.
+ * `ring` and `halo` are the two flat shapes on the ground around the base. The ring carries the colour
+ * of the state, the halo the condition of the gearbox (`haloColor`). The caller makes them to fit the
+ * ground and they are not scaled with the turbine.
  */
 export function buildTurbine(id: string, base: THREE.Vector3, ringGeometry: THREE.BufferGeometry, haloGeometry: THREE.BufferGeometry): TurbineView {
   const g = geometries();

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TwinView } from './TwinView';
 import type { PartKey } from './data/components';
 import type { LiveState } from './data/contract';
-import { type Freshness, type TwinDataProvider, ageText, freshnessOf, pollDelay } from './data/provider';
+import { type Freshness, STOPPED_HINT, type TwinDataProvider, ageText, freshnessOf, pollDelay } from './data/provider';
 import { SITE } from './data/site';
 import type { SceneEngine } from './scene/SceneEngine';
 import './twin.css';
@@ -72,7 +72,9 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
     const producing = turbines.filter((t) => t.activePower > 1).length;
     const powerMw = turbines.reduce((sum, t) => sum + t.activePower, 0) / 1000;
     const wind = live?.weather ?? (turbines.length ? { windSpeed: turbines.reduce((s, t) => s + t.windSpeed, 0) / turbines.length, windDirection: turbines[0].windDirection } : null);
-    return { producing, powerMw, wind, reporting: turbines.length };
+    // Turbines a command holds below rated power: the limits the edge's log calls "in force".
+    const limited = live?.commands ? new Set(live.commands.filter((c) => c.command === 'curtail' && c.status === 'in force').map((c) => c.turbineId)).size : null;
+    return { producing, powerMw, wind, reporting: turbines.length, limited };
   }, [live]);
 
   const ageS = live?.asOf ? Math.max(0, Math.round((now - new Date(live.asOf).getTime()) / 1000)) : null;
@@ -89,7 +91,9 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
   const badgeTitle =
     freshness === 'delayed'
       ? 'These values come from the copies of the tables in the Lakehouse, which are written every few minutes. Open the connection check to see why the Eventhouse is not used.'
-      : 'Open the connection check';
+      : freshness === 'stale' || freshness === 'silent'
+        ? `${STOPPED_HINT} Select the badge for the connection check.`
+        : 'Open the connection check';
 
   const select = useCallback((id: string | null) => {
     setSelected(id);
@@ -112,6 +116,9 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
   }, [chatOpen]);
 
   const selectedLive = live?.turbines.find((t) => t.id === selected);
+  // "Ends in 12 min" counts on the clock the times were written by. For Fabric that is the present; the
+  // simulation has a clock of its own, which the preview can move ahead.
+  const dataNow = live?.source === 'sample' && live.asOf ? new Date(live.asOf).getTime() : now;
   const ask = (question: string) => {
     setChatOpen(true);
     setChatRequest({ key: Date.now(), question });
@@ -164,6 +171,15 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
           <span>Active alarms</span>
           <b className={live && live.alarms.length > 0 ? 'bad' : ''}>{live ? live.alarms.length : '–'}</b>
         </div>
+        {kpi.limited !== null ? (
+          <div className="twin-kpi" title="Turbines that a command holds below their rated power, from the command log of the edge">
+            <span>Limited by command</span>
+            <b className={kpi.limited > 0 ? 'limit' : ''}>
+              {kpi.limited}
+              <small>of {SITE.turbines.length}</small>
+            </b>
+          </div>
+        ) : null}
         <div className="twin-spacer" />
         <button type="button" className={`twin-badge ${freshness}`} onClick={() => setChecking(true)} title={badgeTitle}>
           <i />
@@ -175,13 +191,16 @@ export function TwinApp({ provider }: { provider: TwinDataProvider }) {
       </header>
 
       <FleetList live={live} selected={selected} onSelect={select} />
-      <AlarmFeed alarms={live?.alarms ?? []} onSelect={select} />
+      <AlarmFeed alarms={live?.alarms ?? []} commands={live?.commands ?? null} route={live?.route ?? ''} onSelect={select} />
       {selected ? (
         <TurbinePanel
           key={selected}
           turbineId={selected}
           turbine={selectedLive}
           alarms={(live?.alarms ?? []).filter((a) => a.turbineId === selected)}
+          commands={live?.commands ?? null}
+          route={live?.route ?? ''}
+          now={dataNow}
           provider={provider}
           exploded={exploded}
           onExplode={(open) => setOpened(open ? selected : null)}

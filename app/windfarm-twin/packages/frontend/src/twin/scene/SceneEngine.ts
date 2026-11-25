@@ -13,12 +13,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { type ComponentStatus, PARTS, type PartKey, componentStatus } from '../data/components';
+import { type ComponentStatus, PARTS, type PartKey, componentStatus, gearboxCondition } from '../data/components';
 import type { LiveState, TurbineLive, TurbineState } from '../data/contract';
-import { SITE, gearboxLevel } from '../data/site';
+import { SITE } from '../data/site';
 import { type Exploded, buildExploded } from './exploded';
 import { VERTICAL_SCALE, buildGroundRing, buildRibbon, buildTerrain, heightAt, onGround, valueNoise } from './terrain';
-import { BLADE_LENGTH, HUB_HEIGHT, STATE_COLOR, TURBINE_SCALE, type TurbineView, buildTurbine, downwind, yawFor } from './turbine';
+import { BLADE_LENGTH, HUB_HEIGHT, LEVEL_COLOR, STATE_COLOR, TURBINE_SCALE, type TurbineView, buildTurbine, downwind, haloColor, haloOpacity, yawFor } from './turbine';
 
 export interface SceneCallbacks {
   onSelect: (turbineId: string | null) => void;
@@ -67,7 +67,7 @@ const ZENITH = new THREE.Color('#2a6cc0');
 // Afternoon sun from the west-north-west: it lights the scene from the left of the first view and
 // lays the shadows of the towers across the ridge, towards the viewer.
 const SUN_DIRECTION = new THREE.Vector3(-0.78, 0.43, -0.34).normalize();
-const NACELLE_TINT = [new THREE.Color('#e9ecee'), new THREE.Color('#ffb224'), new THREE.Color('#ff4d5e')];
+const NACELLE_TINT = LEVEL_COLOR.map((colour) => new THREE.Color(colour));
 const SVG = 'http://www.w3.org/2000/svg';
 const smooth = (u: number): number => u * u * (3 - 2 * u);
 const clamp01 = (u: number): number => Math.min(1, Math.max(0, u));
@@ -210,12 +210,12 @@ export class SceneEngine {
             rpm: t.rotorSpeed,
             yaw: yawFor(t.nacelleDirection),
             pitch: THREE.MathUtils.degToRad(producing ? Math.min(t.pitchAngle, 30) : 86),
-            level: gearboxLevel(t.gearboxVibration, t.gearboxOilTemp),
+            level: gearboxCondition(t, state.alarms),
           }
         : { state: 'UNKNOWN', rpm: 0, yaw: view.yaw.rotation.y, pitch: THREE.MathUtils.degToRad(86), level: 0 };
       this.targets.set(id, target);
       view.ringMaterial.color.set(STATE_COLOR[target.state]);
-      view.haloMaterial.color.set(STATE_COLOR[target.state]);
+      view.haloMaterial.color.set(haloColor(target.state, target.level));
 
       const node = this.labelNodes.get(id);
       if (node) {
@@ -749,7 +749,7 @@ export class SceneEngine {
       const pulse = 0.5 + 0.5 * Math.sin(time * 7.5);
       const fault = target.state === 'FAULT';
       view.ringMaterial.opacity = fault ? 0.55 + 0.45 * pulse : emphasis ? 1 : 0.82;
-      view.haloMaterial.opacity = fault ? 0.1 + 0.4 * pulse : isSelected ? 0.38 : target.state === 'DERATED' || target.level > 0 ? 0.24 : emphasis ? 0.18 : 0;
+      view.haloMaterial.opacity = haloOpacity(target.state, target.level, isSelected, emphasis, pulse);
     }
 
     if (this.opened) this.moveParts(this.opened, dt, time);

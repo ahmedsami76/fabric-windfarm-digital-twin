@@ -7,16 +7,63 @@
  * three standing conditions (WT-05 yawed, WT-07 warm gearbox, WT-09 eroded blades), and a gearbox
  * fault. The fault runs through the alarms of the turbine controller as the reference data lists them:
  * vibration high, vibration critical with a derate to 30%, oil temperature high and critical, the trip
- * on oil temperature, and a restart 65 seconds later. Its numbers are invented and are not the numbers
- * of the KQL database.
+ * on oil temperature, and a restart 65 seconds later. It also knows a limit on a turbine's power, set
+ * the way the operations agent sets one after an approval, with the lines the edge's command log would
+ * hold for it. Its numbers are invented and are not the numbers of the KQL database.
  */
-import type { AgentAnswer, Alarm, DiagnosticStep, LiveState, TrendPoint, TurbineLive, TurbineState } from './contract';
+import type { AgentAnswer, Alarm, CommandEntry, DiagnosticStep, LiveState, TrendPoint, TurbineLive, TurbineState } from './contract';
 import type { TwinDataProvider } from './provider';
 import { SITE, powerCurve } from './site';
 
 interface Fault {
   turbineId: string;
   startMs: number;
+}
+
+/** A limit on a turbine's power, as a command sets it. */
+interface Limit {
+  turbineId: string;
+  requestId: string;
+  startMs: number;
+  endMs: number;
+  percent: number;
+}
+
+/** A simulated limit: to this share of rated power, for this long, shown by the "telemetry" after this delay. */
+export const SAMPLE_LIMIT_PERCENT = 30;
+export const SAMPLE_LIMIT_MINUTES = 5;
+export const SAMPLE_CONFIRM_S = 6;
+export const SAMPLE_REQUESTER = 'operations agent WindFarmGearboxWatch, approved in Teams (simulated)';
+
+/** The limit that holds on a turbine at a time: set, shown by the telemetry, and not yet over. */
+const limitAt = (limits: Limit[], turbineId: string, nowMs: number): Limit | undefined =>
+  limits.find((l) => l.turbineId === turbineId && nowMs >= l.startMs + SAMPLE_CONFIRM_S * 1000 && nowMs < l.endMs);
+
+/** The lines the edge's command log would hold for the simulated limits, newest first. */
+function commandLog(limits: Limit[], nowMs: number): CommandEntry[] {
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  return limits
+    .filter((l) => nowMs >= l.startMs && nowMs - l.startMs < 24 * 3600_000)
+    .map((l): CommandEntry => {
+      const shown = nowMs >= l.startMs + SAMPLE_CONFIRM_S * 1000;
+      const over = nowMs >= l.endMs;
+      return {
+        requestId: l.requestId,
+        turbineId: l.turbineId,
+        command: 'curtail',
+        status: over ? 'ended' : shown ? 'in force' : 'taken by the edge, not yet seen in telemetry',
+        at: iso(l.startMs),
+        requestedBy: SAMPLE_REQUESTER,
+        origin: 'cloud',
+        limitKw: (SITE.turbineModel.ratedPowerKw * l.percent) / 100,
+        percent: l.percent,
+        endsAt: iso(l.endMs),
+        confirmedAt: shown ? iso(l.startMs + SAMPLE_CONFIRM_S * 1000) : '',
+        endedAt: over ? iso(l.endMs) : '',
+        error: '',
+      };
+    })
+    .sort((a, b) => (a.at < b.at ? 1 : -1));
 }
 
 /** Seconds from the start of a fault to: the end of the build-up, the trip, the restart, the end. */
@@ -47,6 +94,9 @@ function siteWind(tSec: number): { speed: number; direction: number } {
   const direction = SITE.site.prevailingWindDirectionDeg + 11 * wave(tSec, 2300, 1.3) + 4 * wave(tSec, 190, 0.2);
   return { speed: clamp(speed, 2.5, 20), direction: (direction + 360) % 360 };
 }
+
+/** The simulated wind of the whole site at a time, in m/s. */
+export const sampleWindSpeed = (nowMs: number): number => siteWind(nowMs / 1000).speed;
 
 /**
  * What a fault drives the gearbox to, `s` seconds after it started: vibration and oil temperature
@@ -86,7 +136,7 @@ function faultProgress(fault: Fault | undefined, nowMs: number): number {
   return s >= 0 && s < END_S ? s : -1;
 }
 
-function simulate(index: number, nowMs: number, faults: Fault[]): { live: TurbineLive; alarms: Alarm[] } {
+function simulate(index: number, nowMs: number, faults: Fault[], limits: Limit[] = []): { live: TurbineLive; alarms: Alarm[] } {
   const spec = SITE.turbines[index];
   const model = SITE.turbineModel;
   const t = nowMs / 1000;
@@ -104,10 +154,13 @@ function simulate(index: number, nowMs: number, faults: Fault[]): { live: Turbin
   const active = s >= 0 ? SAMPLE_ALARMS.filter((def) => { const w = WINDOWS.get(def.code); return w !== undefined && s >= w.from && s < w.to; }) : [];
   const derate = Math.min(1, ...active.map((def) => def.derateTo));
 
-  const state: TurbineState = fx?.stopped ? 'FAULT' : windSpeed < model.cutInWindSpeed ? 'IDLE' : derate < 1 ? 'DERATED' : 'RUNNING';
-  const producing = state === 'RUNNING' || state === 'DERATED';
+  // A command's limit: the setpoint is the lower of it and what the controller allows by itself.
+  const commanded = limitAt(limits, spec.id, nowMs);
+  const setpoint = commanded ? (model.ratedPowerKw * commanded.percent) / 100 : model.ratedPowerKw;
+  const state: TurbineState = fx?.stopped ? 'FAULT' : windSpeed < model.cutInWindSpeed ? 'IDLE' : derate < 1 ? 'DERATED' : commanded ? 'CURTAILED' : 'RUNNING';
+  const producing = state === 'RUNNING' || state === 'DERATED' || state === 'CURTAILED';
   const possible = powerCurve(windSpeed) * performance;
-  const limit = model.ratedPowerKw * derate;
+  const limit = Math.min(model.ratedPowerKw * derate, setpoint);
   const wouldBe = Math.min(possible, limit); // what it gives, or would give if it were not stopped
   const activePower = producing ? Math.min(limit, Math.max(0, wouldBe * (1 + 0.015 * wave(t, 9, index)))) : 0;
   const load = activePower / model.ratedPowerKw;
@@ -181,9 +234,10 @@ function simulate(index: number, nowMs: number, faults: Fault[]): { live: Turbin
 
 export function createSampleProvider(clock: () => number = Date.now): TwinDataProvider {
   const faults: Fault[] = [];
+  const limits: Limit[] = [];
 
   const stateAt = (nowMs: number): LiveState => {
-    const all = SITE.turbines.map((_, i) => simulate(i, nowMs, faults));
+    const all = SITE.turbines.map((_, i) => simulate(i, nowMs, faults, limits));
     const turbines = all.map((one) => one.live);
     const wind = siteWind(nowMs / 1000);
     return {
@@ -200,6 +254,7 @@ export function createSampleProvider(clock: () => number = Date.now): TwinDataPr
         ambientTemp: turbines[0]?.ambientTemp ?? 20,
         airDensity: 1.11,
       },
+      commands: commandLog(limits, nowMs),
     };
   };
 
@@ -213,7 +268,7 @@ export function createSampleProvider(clock: () => number = Date.now): TwinDataPr
       const points: TrendPoint[] = [];
       for (let m = Math.max(5, Math.min(360, minutes)); m >= 0; m--) {
         const at = end - m * 60000;
-        const { live } = simulate(index, at, faults);
+        const { live } = simulate(index, at, faults, limits);
         points.push({
           t: new Date(at).toISOString(), activePower: live.activePower, windSpeed: live.windSpeed, rotorSpeed: live.rotorSpeed,
           gearboxOilTemp: live.gearboxOilTemp, gearboxBearingTemp: live.gearboxBearingTemp, gearboxVibration: live.gearboxVibration,
@@ -242,6 +297,13 @@ export function createSampleProvider(clock: () => number = Date.now): TwinDataPr
       if (running && faultProgress(running, now) >= 0) return;
       for (let i = faults.length - 1; i >= 0; i--) if (faults[i].turbineId === turbineId) faults.splice(i, 1);
       faults.push({ turbineId, startMs: now });
+    },
+    limitTurbine: (turbineId: string) => {
+      const now = clock();
+      if (!SITE.turbines.some((t) => t.id === turbineId)) return;
+      if (limits.some((l) => l.turbineId === turbineId && now < l.endMs)) return; // one limit at a time
+      const requestId = `sample-${now.toString(36)}`;
+      limits.push({ turbineId, requestId, startMs: now, endMs: now + SAMPLE_LIMIT_MINUTES * 60_000, percent: SAMPLE_LIMIT_PERCENT });
     },
   };
 }

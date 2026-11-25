@@ -13,6 +13,11 @@ export interface TwinDataProvider {
   diagnostics(): Promise<DiagnosticStep[]>;
   /** Only the simulation has it: start a gearbox fault on a turbine, as the edge script does. */
   injectFault?(turbineId: string): void;
+  /**
+   * Only the simulation has it: limit a turbine's power for a few minutes, as the operations agent does
+   * after an approval. The deployed twin shows commands and sends none.
+   */
+  limitTurbine?(turbineId: string): void;
   /** Only the Fabric provider has it: the route of the last answer, and what the Eventhouse route said. */
   routeStatus?(): { route: 'eventhouse' | 'lakehouse' | null; eventhouseSaid: string | null };
 }
@@ -23,11 +28,29 @@ export const POLL_MS = 5000;
 /** The copies in the Lakehouse change every few minutes: asking twice a minute is enough. */
 export const LAKEHOUSE_POLL_MS = 30_000;
 
-/** Telemetry older than this many seconds is shown as stale. */
-export const STALE_AFTER_S = 60;
+/**
+ * Telemetry older than this many seconds is shown as stale.
+ *
+ * The age the page shows is the browser's clock minus the time the turbine put on the newest row. A
+ * healthy pipeline already puts a delay in it: the simulator reports every 5 seconds, the Eventhouse
+ * collects up to 20 seconds of events before it stores them (`fabric/kql/01-tables.kql`), the page asks
+ * every 5 seconds, and broker, data flow and eventstream add their own. The one reading from a deployed
+ * app, on 23 November 2026, was 56 seconds. With the first limit of 60 seconds the badge would have
+ * changed between "Live" and "Stale" on a pipeline that works, so the limit is two minutes. The
+ * connection check prints the delay of the last 15 minutes; move this limit if yours is higher.
+ */
+export const STALE_AFTER_S = 120;
 
-/** The same for the Lakehouse route, whose values are normally 5 to 10 minutes old. */
+/**
+ * The same for the Lakehouse route. The copies are written about every 5 minutes
+ * (`TargetLatencyInMinutes=5` in `fabric/kql/03-onelake-availability.kql`); the one reading from a
+ * deployed app was 2 minutes.
+ */
 export const LAKEHOUSE_STALE_AFTER_S = 20 * 60;
+
+/** What the badge says under the pointer when values stopped arriving: the usual cause and its cure. */
+export const STOPPED_HINT =
+  'No new values are arriving. The usual cause is the edge VM: it is stopped every day at the time set in VM_AUTO_SHUTDOWN_UTC (08:00 UTC unless changed). On the workstation: bash infra/vm.sh status, then bash infra/vm.sh start. Values return about 5 minutes after the start.';
 
 /** The wait before the next question, by the route of the last answer. */
 export function pollDelay(route: 'eventhouse' | 'lakehouse' | 'sample' | undefined, failed: boolean): number {

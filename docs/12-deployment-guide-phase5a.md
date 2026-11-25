@@ -153,6 +153,8 @@ Steps 4 to 6 prove the path with notebook 12, which sends one command per run. F
 - **Notebook 12 has two masters since Phase 5b.** The operations agent runs it as its action, and the values in its first code cell are what a run falls back on. A turbine you leave there after a test becomes the turbine of any run that passes none. The command center has no such cell and is never run by the agent.
 - **One line per command, and the answer with it.** The connection is made once per session. After that each cell is one command, and the notebook then reads the telemetry until the command shows, or says that it did not.
 
+**Since Phase 5c the notebook also reads the edge's command log.** Once [that phase](14-deployment-guide-phase5c.md) is deployed, a send is answered twice: first by the edge (it took the command, or it refused it and why), then by the telemetry. `history()` prints the log. On a database without the log the notebook says so once and behaves as described here.
+
 **[Fabric]** In the workspace: **Import**, **Notebook**, **From this computer**, and choose `fabric/notebooks/13_command_center.ipynb`. It needs no Lakehouse attached. Open it and run the first two code cells; the second ends with the state of the turbines:
 
 ```text
@@ -181,11 +183,14 @@ After a send the cell prints the command, the line `Sent: …`, and then one of 
 |---|---|
 | `WT-07: limit of 1260 kW in force, seen … s after the send (state CURTAILED, setpoint 1260 kW, …)` | The command arrived and the telemetry shows it. The seconds are the whole way: eventstream, edge, simulator, and the telemetry back into the Eventhouse |
 | `WT-07: not seen after 150 s (…)` | It did not show. The table below says where to look, hop by hop |
-| `WT-07: already so before the command (…)` | The turbine already looked like that, for example a release on a turbine that was not curtailed. The command was sent; the telemetry cannot tell you whether it arrived |
+| `WT-07: already so before the command (…)` | The turbine already looked like that, for example a release on a turbine that was not curtailed. The command was sent; the telemetry cannot tell you whether it arrived. With the command log of Phase 5c this case is settled by the edge's line, and the notebook prints that instead |
+| `WT-07: the edge took the command … s after it was written (at …Z), in the log … s after the send.` | Phase 5c: the edge's own record of this command has reached the database. The first number is the way from Fabric to the edge |
+| `The edge refused the command: …` | Phase 5c: the edge's reason. Nothing is waited for |
+| `The edge's log has no entry for this command.` | Phase 5c: after 150 seconds. With the telemetry showing the command, the log's way back is broken, not the command's. Without it, the command did not arrive |
 
 `send(…, dry_run=True)` builds and shows the command and sends nothing; `send(…, wait=False)` sends and does not wait. The word `all` in the place of the turbine means all twelve.
 
-The last cell draws the same as a panel: two lists, a slider, **Send** and **Status**, and a log. It is optional and the least certain part: whether a Fabric notebook shows it and runs its buttons I have not seen. The cells above do not depend on it.
+The last cell draws the same as a panel: two lists, a slider, **Send**, **Status** and **Command log**, and a log. It is optional and the least certain part: whether a Fabric notebook shows it and runs its buttons I have not seen. The cells above do not depend on it.
 
 **Send me** the lines a `curtail` prints. `seen … s after the send` is the time from Fabric to the turbine and back, which has not been measured yet.
 

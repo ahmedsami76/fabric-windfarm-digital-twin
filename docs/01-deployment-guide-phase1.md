@@ -141,7 +141,7 @@ Three habits that avoid obstacles of those runs:
    | `VM_SIZE` | A list of VM sizes to try, in order. All have 8 vCPUs and 32 GB. |
    | `VM_ADMIN` | The administrator account on the VM, `azureuser`. This is the name SSH signs in with, not your own name. `bash infra/vm.sh ssh` uses it for you. |
    | `AIO_SKU` | The pricing tier of Azure IoT Operations, Standard or Essentials. Blank means the default of the CLI, which is what the validated run used. |
-   | `SIM_IMAGE` | The simulator image, `windfarm-simulator:1.1.0` |
+   | `SIM_IMAGE` | The simulator image, `windfarm-simulator:1.2.0` |
 
 **Choosing the daily shutdown time.** The VM stops itself once a day to limit cost. The time is UTC, so choose an hour when you are asleep: the default `0800` is 02:00 in Houston and Chicago, 03:00 in New York, 09:00 in Berlin. A time in your evening stops the VM in the middle of your work, and a stopped VM looks like a broken one: SSH times out and the cluster shows as Offline. Leave the setting blank for no shutdown.
 
@@ -446,7 +446,7 @@ RawEvents
 | order by Messages desc
 ```
 
-Expected: six message types (`telemetry`, `weather`, `asset`, `heartbeat`, and `alarm` and `state` once something has happened), `telemetry` the largest, `Latest` within the last minute. Data usually appears within a minute of step 6.7.
+Expected: six message types (`telemetry`, `weather`, `asset`, `heartbeat`, and `alarm` and `state` once something has happened), `telemetry` the largest, `Latest` within the last minute. Since Phase 5c there can be a seventh, `command`: the edge's record of an operating command it was given. Data usually appears within a minute of step 6.7.
 
 **Query 18. Did the wizard use the right mapping?**
 

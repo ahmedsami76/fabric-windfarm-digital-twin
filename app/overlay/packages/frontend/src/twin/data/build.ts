@@ -3,4 +3,4 @@
  * tools/build-twin-assets.py; do not edit. The connection check prints it for the page and for the
  * functions. When the two differ, an older build of one of them is still answering.
  */
-export const PAGE_BUILD = 'f8f1ec329f64';
+export const PAGE_BUILD = 'b0a8ce151d05';

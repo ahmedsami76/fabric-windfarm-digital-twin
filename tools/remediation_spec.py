@@ -20,7 +20,6 @@ REFERENCE = ROOT / "data" / "reference"
 TABLE = "GearboxDecisionLive"
 AGENT = "WindFarmGearboxWatch"
 ACTION_NAME = "Curtail turbine"
-ACTION_ALIAS = "curtailTurbine"          # the key of the action in the agent's definition
 NOTEBOOK = "12_send_edge_command"
 REQUESTED_BY = f"operations agent {AGENT}, approved in Teams"
 CURTAIL_PERCENT = 30            # the limit the turbine controller itself applies at 8 mm/s (GBX-VIB-CRIT)

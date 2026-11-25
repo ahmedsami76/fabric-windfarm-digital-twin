@@ -169,7 +169,8 @@ Send operating commands to the turbines of Northwind Ridge by hand, one line eac
 
 - Run the first two code cells once per session. After that, run any cell below as often as you like: each is one command.
 - The commands travel the path of Phase 5a: the eventstream `{EVENTSTREAM}`, the data flow of Azure IoT Operations, the control topic on the edge. Before the first run: `bash infra/08-create-command-path.sh` on the workstation.
-- After a command the notebook waits until the telemetry in `{KQL_DATABASE}` shows it, and says how many seconds that took.
+- After a command the notebook waits for two things in `{KQL_DATABASE}` and says how many seconds each took: the edge's own entry in its command log (Phase 5c: it took the command, or it refused it and why), and the telemetry that shows the turbine following. On a database without the command log it follows the telemetry only.
+- `history()` shows the command log: who asked for what, from Fabric or at the edge, and what became of it.
 - The control topic takes five commands: `curtail`, `release`, `stop`, `start`, `reset`. It cannot inject a fault or change the wind; those stay on the edge (`simctl`).
 
 This notebook is for you. `12_send_edge_command` is the one the operations agent runs as its action: leave the values in that notebook alone, and send by hand from here.""", ()),
@@ -232,8 +233,21 @@ def status(turbine="all", say=print):
     say(status_table(kql(status_query(turbine))))
 
 
+def history(lookback="1h", turbine="all", say=print):
+    \"\"\"The command log of the edge, newest first: who asked for what, and what became of it.
+
+    history()     history("6h")     history("1h", "WT-03")\"\"\"
+    try:
+        query = history_query(lookback, turbine)
+    except ValueError as error:
+        say(f"Not shown: {{error}}")
+        return
+    has_log, _ = log_of(kql(log_query("probe")))
+    say(history_table(kql(query)) if has_log else NO_LOG)
+
+
 def send(command, turbine, percent=None, duration="", reason="", wait=True, dry_run=False, say=print):
-    \"\"\"Build one command, check it, send it, and wait until the telemetry shows it.
+    \"\"\"Build one command, check it, send it, and wait until the edge's log and the telemetry show it.
 
     send("curtail", "WT-07", percent=30, duration="10m")     send("release", "WT-07")
     send("stop", "WT-05", duration="15m", reason="maintenance")     send("start", "WT-05")     send("reset", "WT-03")
@@ -265,7 +279,8 @@ def send(command, turbine, percent=None, duration="", reason="", wait=True, dry_
         producer.send_batch(batch)
     say(f"Sent: {{cmd['command']}} for {{cmd['turbine']}}, request {{cmd['requestId']}}, at {{cmd['issuedAt']}} UTC.")
     if wait:
-        follow(cmd, before, lambda: by_turbine(kql(effect_query(cmd["turbine"], since=cmd["issuedAt"]))), say=say)
+        follow(cmd, before, lambda: by_turbine(kql(effect_query(cmd["turbine"], since=cmd["issuedAt"]))), say=say,
+               log=lambda: log_of(kql(log_query(cmd["requestId"]))))
 
 
 last_command = None
@@ -276,6 +291,10 @@ status()""", ()),
 
 Run this before and after anything. `status("WT-07")` shows one turbine.""", ()),
     ("code", """status()""", ()),
+    ("markdown", """## The command log
+
+What the edge logged, newest first: each command with the turbine, who asked for it, what became of it (`in force`, `ended`, `confirmed`, `refused` and why), and the seconds it took from Fabric to the edge and from the edge back as a reading. Commands the operations agent sent are here too, under its name. `history("6h")` looks further back, `history("1h", "WT-03")` at one turbine.""", ()),
+    ("code", """history()""", ()),
     ("markdown", """## Limit a turbine, and lift the limit
 
 `percent` is the share of its rated 4,200 kW the turbine may still produce; 30 is 1,260 kW. A curtailment needs a `duration` (`90s`, `10m`, `1h`) and ends by itself after it. In a weak wind the turbine produces less than the limit anyway: the state and the ring in the twin still change, the power does not.""", ()),
@@ -292,11 +311,11 @@ A turbine that tripped on a fault shows `FAULT`. It starts again by itself once 
     ("code", """send("reset", "WT-03")""", ()),
     ("markdown", """## All twelve, or a look without sending
 
-The word `all` in the place of the turbine means all twelve; nothing else does. `dry_run=True` builds and shows the command and sends nothing. `wait=False` sends and does not wait for the telemetry.""", ()),
+The word `all` in the place of the turbine means all twelve; nothing else does. `dry_run=True` builds and shows the command and sends nothing. `wait=False` sends and does not wait for the log or the telemetry.""", ()),
     ("code", """send("curtail", "all", percent=50, duration="2m", dry_run=True)""", ()),
     ("markdown", """## The same as a panel (optional)
 
-Pick the values and select **Send**; **Status** shows the turbines. The box below the buttons is the log. If no panel appears, or a button does nothing, use the cells above: they do the same, and the panel adds nothing to them but the buttons.""", ()),
+Pick the values and select **Send**; **Status** shows the turbines, **Command log** what the edge logged. The box below the buttons is the log. If no panel appears, or a button does nothing, use the cells above: they do the same, and the panel adds nothing to them but the buttons.""", ()),
     ("code", """import ipywidgets as widgets
 
 w_command = widgets.Dropdown(options=list(COMMANDS), value="curtail", description="Command")
@@ -304,9 +323,10 @@ w_turbine = widgets.Dropdown(options=TURBINES + ["all"], value="WT-07", descript
 w_percent = widgets.IntSlider(value=30, min=0, max=100, step=5, description="Percent")
 w_duration = widgets.Text(value="10m", description="Duration")
 w_reason = widgets.Dropdown(options=["operator", "maintenance"], value="operator", description="Stop as")
-w_wait = widgets.Checkbox(value=True, description="Wait for the telemetry")
+w_wait = widgets.Checkbox(value=True, description="Wait for the result")
 w_send = widgets.Button(description="Send", button_style="warning")
 w_status = widgets.Button(description="Status")
+w_history = widgets.Button(description="Command log")
 w_log = widgets.Textarea(value="", disabled=True, layout=widgets.Layout(width="100%", height="260px"))
 
 
@@ -326,8 +346,9 @@ w_send.on_click(lambda _: _run(lambda: send(
     w_command.value, w_turbine.value, percent=w_percent.value, duration=w_duration.value,
     reason=w_reason.value if w_command.value == "stop" else "", wait=w_wait.value, say=_log)))
 w_status.on_click(lambda _: _run(lambda: status(say=_log)))
+w_history.on_click(lambda _: _run(lambda: history(say=_log)))
 panel = widgets.VBox([widgets.HBox([w_command, w_turbine]), widgets.HBox([w_percent, w_duration, w_reason]),
-                      widgets.HBox([w_send, w_status, w_wait]), w_log])
+                      widgets.HBox([w_send, w_status, w_history, w_wait]), w_log])
 display(panel)""", ()),
 ]
 

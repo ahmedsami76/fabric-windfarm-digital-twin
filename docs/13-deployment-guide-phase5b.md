@@ -2,7 +2,7 @@
 
 Phase 3 gave the operations agent eyes: it notices a gearbox that starts to run rough and tells an engineer in Teams. Phase 5a built the way back to the edge and proved it with a command sent by hand. Phase 5b joins the two. The agent's message now says what limiting the turbine would cost and what a gearbox costs, and proposes the action **Curtail turbine**. When the engineer approves it in Teams, the notebook of Phase 5a sends the command and the turbine is limited to 30 percent of its rated power for an hour.
 
-**Status of this guide.** Written on 24 November 2026, and first run the same evening; [What was and was not tested](#what-was-and-was-not-tested) has what that run has shown so far. In short: the rehearsal of step 3 works and is slow to start (two to three minutes); the script of step 4 is refused by Fabric, so **step 4 is done by hand for now**; steps 5 and 6 have not been reported yet. What follows in this paragraph is how the guide was written. **Nothing in it had run against a tenant then.** Phase 5a was reported to me as working on the same evening ("WT-07 curtailed"); I have seen no output of that run. The simulator's side is measured: what the proposed curtailment does to a gearbox with a small fault, at five winds. The Fabric side is built from Microsoft's documentation as read on 24 November: how an action is added to an operations agent, the published form of an agent's definition, and the job that runs a notebook with parameters. The seven things that only a run can show are listed in [What was and was not tested](#what-was-and-was-not-tested), and the steps are ordered so that each of them fails alone and says where: first the table, then the notebook as a job without the agent, then the agent.
+**Status of this guide.** Written on 24 November 2026, and first run the same evening; [What was and was not tested](#what-was-and-was-not-tested) has what that run showed. In short: the rehearsal of step 3 works and is slow to start (two to three minutes); the script of step 4 is refused by Fabric, so **step 4 is done by hand for now**; step 5 produced a playbook with one rule; and step 6 was **reported as working**: the message arrived in Teams, it was approved, and WT-03 was curtailed. I saw the outputs of steps 3 to 5 and not the message, the approval or the turbine. [Phase 5c](14-deployment-guide-phase5c.md) adds the record of the command and shows it in the twin. What follows in this paragraph is how the guide was written. **Nothing in it had run against a tenant then.** Phase 5a was reported to me as working on the same evening ("WT-07 curtailed"); I have seen no output of that run. The simulator's side is measured: what the proposed curtailment does to a gearbox with a small fault, at five winds. The Fabric side is built from Microsoft's documentation as read on 24 November: how an action is added to an operations agent, the published form of an agent's definition, and the job that runs a notebook with parameters. The seven things that only a run can show are listed in [What was and was not tested](#what-was-and-was-not-tested), and the steps are ordered so that each of them fails alone and says where: first the table, then the notebook as a job without the agent, then the agent.
 
 ## Contents
 
@@ -142,12 +142,12 @@ It reads the agent's definition from the Fabric API, saves it unchanged under `f
 Saved the agent's definition as it was: fabric/operations-agent/saved/WindFarmGearboxWatch-20261125T021341Z.json
 Wrote the Phase 5b instructions and the action. Reading the definition back:
 Operations agent WindFarmGearboxWatch (…) in workspace WindFarmDigitalTwin
-  Definition part: OperationsAgentV1.json
+  Definition part: Configurations.json
   Running: no
   Instructions: 2810 characters. First rule: Alert me when the gearbox vibration of a turbine crosses above 4 mm/s.
   Data source …: KustoDatabase WindFarmEH
   Messages go to: …
-  Action curtailTurbine: 'Curtail turbine' (FabricJobAction), runs Notebook 12_send_edge_command as RunNotebook. Parameters: turbine, percent, duration, requested_by
+  Action …: 'Curtail turbine' (FabricJobAction), runs SynapseNotebook 12_send_edge_command as RunNotebook. Parameters: turbine, percent, duration, requested_by
   Playbook in the definition: empty
 Instructions and action are those of Phase 5b.
 The agent was running and is now stopped.
@@ -252,7 +252,9 @@ The figures are read from the newest row of WT-03 at that moment. The power move
 
 **Approve it.** Microsoft's published page says the message offers **Yes** to approve and **No** to reject, shows the values the agent chose, and lets you change them before you approve. The current source of that page no longer describes the buttons, so take what your message shows. Changing `percent` to 50 before approving is a good moment in front of an audience: the person, not the agent, has the last word on the number.
 
-**Then ask the data agent**, as in Phase 3: `Has a gearbox bearing been replaced on this site before, what did it cost and how long was the turbine down?` The history holds such a repair on WT-02. That answer comes from the data. It is deliberately not written into the operations agent's instructions.
+**Then ask the data agent**: `Has a gearbox bearing been replaced on this site before, what did it cost and how long was the turbine down?` The history holds such a repair on WT-02. That answer comes from the data. It is deliberately not written into the operations agent's instructions.
+
+The data agent is not in Teams. The message you approved came from the operations agent, which is a different item. Ask the data agent where Phases 3 and 4 put it: in the chat panel of the twin, or in Fabric, on the page of **WindFarmDataAgent**. Microsoft describes a way to bring a data agent into Teams, by publishing it to the Agent Store of Microsoft 365 Copilot; that needs Microsoft 365 Copilot licences and has not been tried in this demo.
 
 **Send me:** a picture of the Teams message, with the values of the action visible; what the approval looks like; the notebook's run from **Recent runs** if it failed; and four times read off a clock: fault started, message arrived, approved, ring blue. If the halo turned red and back, those two times as well.
 
@@ -274,7 +276,7 @@ bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh wind --clear
 
 If you do not need the agent between demos, select **Stop**: a running agent evaluates every five minutes and uses capacity for it.
 
-One thing to know when you leave it running. A curtailed turbine has no rows in `GearboxDecisionLive`. When the hour ends and the fault is still there, the turbine returns to full power with its vibration already above 4 mm/s, and the rule, which waits for a crossing, may not speak again. Whether it does depends on how the agent treats the gap, which I do not know. Keeping track of an open case, with a work order and a follow-up, is Phase 5c.
+One thing to know when you leave it running. A curtailed turbine has no rows in `GearboxDecisionLive`. When the hour ends and the fault is still there, the turbine returns to full power with its vibration already above 4 mm/s, and the rule, which waits for a crossing, may not speak again. Whether it does depends on how the agent treats the gap, which I do not know. Phase 5c records what the turbine was told and when the limit ended; a rule that comes back to a case that is still open is not built, and [its guide says so](14-deployment-guide-phase5c.md#what-this-phase-leaves-open).
 
 ## If something fails
 
@@ -318,7 +320,7 @@ The cost of the limit is the power above 1,260 kW at that price, for the hour, a
 
 **The action cannot stop a turbine.** Fabric makes every name of the notebook's parameter cell a parameter of the action, so that cell holds four names and the command is not one of them. It is set in the next cell, after a caller's values, and a caller that passes `command` anyway changes nothing; a test does exactly that. The notebook refuses a curtailment without a turbine, without an end, with a percentage outside 0 to 100, and for more than one turbine: the word `all`, which the command center accepts, is refused here.
 
-**Whose rights.** An operations agent acts with the rights of the person who created it, and so does the notebook it starts. The person who approves in Teams needs write permission on the agent, and is not the one the notebook runs as. `requestedBy` in the command therefore says `operations agent WindFarmGearboxWatch, approved in Teams`, a text the agent passes. Who approved is known to Teams and to the agent's activity, not to the command. Recording it with the action is part of Phase 5c.
+**Whose rights.** An operations agent acts with the rights of the person who created it, and so does the notebook it starts. The person who approves in Teams needs write permission on the agent, and is not the one the notebook runs as. `requestedBy` in the command therefore says `operations agent WindFarmGearboxWatch, approved in Teams`, a text the agent passes. Who approved is known to Teams and to the agent's activity, not to the command. Phase 5c records the command at the edge with this text; it cannot record the approver, because Fabric does not hand that name to the notebook.
 
 **Why the agent is changed through the API.** Microsoft publishes the form of an agent's definition, and the API to read and write it, for signed-in users. The script changes two things in that definition, the instructions and one action, and writes everything else back as it read it. It saves the definition first. The gain over typing into the page is that parameter names cannot be mistyped and that `--show` can say, in a line, how the agent is really set up. The playbook is still generated in the portal. The published form calls it "reserved for future expansion", and the script writes it empty and leaves the agent stopped, so that no rule made from the Phase 3 instructions runs under the new ones. That description turned out to be incomplete on the first evening: what Fabric returns for an agent made in the portal holds the playbook itself, with its rules and the objects they watch, and Fabric checks it when it is written back. Whether the empty playbook is what Fabric refused in step 4 is not known yet.
 
@@ -345,7 +347,7 @@ The cost of the limit is the power above 1,260 kW at that price, for the hour, a
 
 - An action is added in **Agent setup** with **Add action**; a **Fabric item** action can run a notebook; it has an **Action name**, an **Action description** and optional parameters that the agent passes when it invokes the action.
 - The agent uses the delegated identity of its creator, and an approved action runs with the creator's permissions.
-- The definition of an operations agent: `configuration` with `instructions`, `dataSources`, `actions` and `messageDestination`; `playbook`; `shouldRun`. An action of kind `FabricJobAction` has a `connection` with `jobArtifactId`, `jobWorkspaceId`, `itemType` and `jobType`, and parameters with a name and a description. The page gives `Notebook` and `RunNotebook` as examples of the last two. `goals` was removed in June 2026; goals belong in `instructions`.
+- The definition of an operations agent: `configuration` with `instructions`, `dataSources`, `actions` and `messageDestination`; `playbook`; `shouldRun`. An action of kind `FabricJobAction` has a `connection` with `jobArtifactId`, `jobWorkspaceId`, `itemType` and `jobType`, and parameters with a name and a description. The page gives `Notebook` and `RunNotebook` as examples of the last two; for a notebook the portal writes `SynapseNotebook` (seen on 24 November). `goals` was removed in June 2026; goals belong in `instructions`.
 - `getDefinition` for an operations agent is a long-running call for signed-in users. Its page names the part `OperationsAgentV1.json` where the definition article says `Configurations.json`; the tool finds the part by its content.
 - A notebook job is started with `…/items/{id}/jobs/instances?jobType=RunNotebook` and `executionData.parameters`, each value with a type.
 - `%pip` is switched off by default in pipeline runs of a notebook.
@@ -356,7 +358,10 @@ The cost of the limit is the power above 1,260 kW at that price, for the hour, a
 |---|---|
 | 3 | The rehearsal's output, twice: `Completed` after 196 and after 137 seconds, with 153 and 105 seconds in `NotStarted`. So the job call from the workstation works and the notebook finishes as a job. Not seen: whether WT-07 followed, and whether the notebook was already the one of step 2 |
 | 4 | The script listed the agents and the notebooks, read the agent's definition and saved it. Fabric refused the update: `400: UnknownError. An error occurred while processing the operation`. Cause open |
+| 4, by hand, done | `--show` at 22:38: the instructions are those of Phase 5b word for word; the action `Curtail turbine` runs `SynapseNotebook 12_send_edge_command` as `RunNotebook` with the parameters `turbine`, `percent`, `duration`, `requested_by`; the agent is stopped and its playbook empty; the definition's part is named `Configurations.json`; the action and the data source are kept under their ids |
 | 4, by hand | A picture of the dialog **Add action**, page **Action details**: **Action name**, **Action description**, and under **Parameters** eight rows that Fabric had read from the notebook's first code cell, `command` among them, each of type `string` and each asking for a description. The notebook was changed for it the same hour: four names in that cell |
+| 5 | `--save` at 22:45: the agent is running, and its definition now holds a playbook of 15,762 characters with one rule (`playbook.RuleDefinitions: 1 entries`) and 14 entries under `playbook.OntologyDefinitions`. Not seen yet: the rule's own text |
+| 6 | **Reported**, 24 November, 23:14 and after: the Teams message of the operations agent arrived; it was approved; WT-03 was curtailed ("Approved, WT-03 curtailed"). Seen: the data agent's answer to the guide's question, with work order `WO-2025-0119`, 121,430 USD and 215.2 hours. Not seen: the message and its values, the approval, the notebook's run, the turbine, and any time on a clock |
 | `--restore` | Tried with the file just saved, to see whether an unchanged definition is accepted. Refused, with a reason: `rule 'Rule Gearbox Vibration Early Warning' monitors class 'TurbineRunSample', but 'playbook.ontologyDefinitions' defines class 'TurbineRunSample' 3 times`. So the API does take and check updates, and the definition holds the playbook |
 
 **Unproven: what your run decides**
@@ -364,12 +369,14 @@ The cost of the limit is the power above 1,260 kW at that price, for the hour, a
 1. **The update policy on the tenant.** That `GearboxDecisionLive` fills as written. Step 1.
 2. **The values of a job reach the notebook.** That the first code cell is taken as the parameter cell after import. Step 3.
 3. **pip as a plain command inside a job.** Step 3.
-4. **The update of the agent's definition.** That Fabric accepts it for an agent made in the portal, that `Notebook` and `RunNotebook` are the right words for a notebook, and what the page shows afterwards. Step 4, with the way by hand next to it.
+4. **The update of the agent's definition.** That Fabric accepts it for an agent made in the portal, and what the page shows afterwards. Step 4, with the way by hand next to it. Refused on the first evening; one cause is known and corrected (the item type of a notebook is `SynapseNotebook`, not `Notebook`), and whether it was the only one is not.
 5. **The playbook.** That one rule on `GearboxDecisionLive` comes out, and that the rule or the message carries the action. Step 5.
 6. **The agent's values.** That it passes the turbine of the row, 30, `60m` and the text for `requested_by`, and that the message leads with the cost. A language model writes the message; the instructions ask, they cannot force. Step 6.
 7. **The times.** How long the job takes, how long the agent takes after its look, and whether the red halo clears in the deployment as in the simulator. Steps 3 and 6.
 
-Not looked at in this phase: who approved (Phase 5c), a second proposal when a curtailment ends with the fault still there (step 7), and `bash infra/99-cleanup.sh --fabric`, which does not know the operations agent or this table yet.
+After the first run, items 1, 2, 3, 5 and 6 count as reported with step 6: a limit that reached WT-03 through the agent needs the table, the values, the install and the playbook to have worked. None of them was seen by itself. Item 4 stands as it is, and item 7 has one number, the job's start.
+
+Not looked at in this phase: who approved, and a second proposal when a curtailment ends with the fault still there (step 7); neither is built in Phase 5c either. `bash infra/99-cleanup.sh --fabric` does not know the operations agent or this table yet.
 
 ## Go back to Phase 3
 

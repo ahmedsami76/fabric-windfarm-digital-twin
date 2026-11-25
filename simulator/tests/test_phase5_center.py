@@ -1,5 +1,5 @@
 """The command center notebook (13_command_center): commands sent by hand reach the simulator, and the
-notebook tells from the telemetry whether each took effect.
+notebook tells from the edge's command log and from the telemetry what became of each.
 
 The cells are executed in one namespace against stand-ins for what only Fabric has. Two of the stand-ins
 are joined to a simulator: the pretend event hub hands every event to the simulator's handler of the
@@ -35,6 +35,7 @@ def _load(name: str, path: Path):
 
 center = _load("command_center", ROOT / "tools" / "command_center.py")
 edge = _load("edge_command_center", ROOT / "tools" / "edge_command.py")
+reference = _load("command_log_reference", Path(__file__).with_name("command_log_reference.py"))
 
 
 def cells(kind="code"):
@@ -66,7 +67,7 @@ def test_the_notebook_is_current_and_is_not_one_a_job_can_fill_in():
     assert {text.split('"')[1] for text in examples} == set(edge.COMMANDS)
 
 
-def test_the_figures_and_names_are_those_of_the_site_and_the_tables():
+def test_the_figures_and_names_are_those_of_the_site_and_the_tables(tmp_path):
     with open(ROOT / "data" / "reference" / "turbines.csv", newline="", encoding="utf-8") as handle:
         turbines = list(csv.DictReader(handle))
     assert [row["turbineId"] for row in turbines] == center.TURBINES
@@ -76,14 +77,30 @@ def test_the_figures_and_names_are_those_of_the_site_and_the_tables():
     for column in ("Timestamp", "TurbineId", "State", "PowerSetpoint", "ActivePower", "WindSpeed", "GearboxVibration", "GearboxOilTemp"):
         assert f"{column}:" in telemetry, column
         assert column in center.status_query() or column in center.effect_query("WT-01")
-    # The two queries through the Kusto language library, where it is installed (tools/kql-syntax-check.js says how).
-    try:
-        check = subprocess.run(["node", str(ROOT / "tools" / "kql-syntax-check.js"), "/dev/stdin"], capture_output=True, text=True,
-                               input=center.status_query("WT-07") + "\n\n" + center.effect_query("all", since="2026-11-25T03:10:00Z") + "\n")
-    except FileNotFoundError:
-        check = None
-    if check is not None and "Cannot find module" not in check.stderr:
-        assert check.returncode == 0 and "no syntax diagnostics" in check.stdout, check.stdout + check.stderr
+    # The queries through the Kusto language library, where it is installed (tools/kql-syntax-check.js says how):
+    # their grammar, and with the tables and functions of the database, their columns and types.
+    queries = "\n\n".join([center.status_query("WT-07"), center.effect_query("all", since="2026-11-25T03:10:00Z"),
+                           center.log_query("a1b2c3d4e5f6"), center.history_query("6h", "WT-03")]) + "\n"
+    scratch = tmp_path / "99-command-center.kql"
+    scratch.write_text(queries, encoding="utf-8")
+    database = sorted(str(f) for f in (ROOT / "fabric" / "kql").glob("0*.kql"))
+    for tool, args, good in (("kql-syntax-check.js", [str(scratch)], "no syntax diagnostics"),
+                             ("kql-semantic-check.js", database + [str(scratch)], "no diagnostics")):
+        try:
+            check = subprocess.run(["node", str(ROOT / "tools" / tool)] + args, capture_output=True, text=True)
+        except FileNotFoundError:
+            break
+        if "Cannot find module" in check.stderr:
+            break
+        assert check.returncode == 0 and good in check.stdout, check.stdout + check.stderr
+    # The log is asked for in a way that also runs on a database without it, and only by a request's identifier.
+    log = center.log_query("a1b2-c3'; drop table x")
+    assert log.startswith("union isfuzzy=true") and "RequestId == 'a1b2-c3droptablex'" in log and log.count("EdgeCommands") == 2
+    assert center.history_query().startswith("CommandLog(1h)\n")
+    assert center.history_query("90M", "wt-03").startswith("CommandLog(90m)\n| where TurbineId in ('WT-03', 'EDGE-01')")
+    for lookback, turbine in (("1h", "WT-13"), ("1h; .drop table x", "all"), ("", "all"), ("0h", "all"), ("1 hour", "all"), ("ago(1h)", "all")):
+        with pytest.raises(ValueError):
+            center.history_query(lookback, turbine)
     # Only a turbine, or the word all, ever reaches a query.
     for wrong in ("WT-13", "WT-07' or 1==1 //", "", None, "wt-7"):
         with pytest.raises(ValueError):
@@ -163,6 +180,86 @@ def test_following_a_command_says_when_it_showed_and_when_it_cannot_tell():
     assert center.follow(cmd, {}, lambda: {}, clock=clock, sleep=sleep, say=lambda line: None, limit=10) is False
 
 
+def test_following_a_command_with_the_edges_log():
+    cmd = {"command": "curtail", "turbine": "WT-07", "percent": 30.0}
+    running = {"TurbineId": "WT-07", "State": "RUNNING", "PowerSetpoint": 4200.0, "ActivePower": 3000.0, "Timestamp": "2026-11-25T03:10:00.000Z"}
+    limited = dict(running, State="CURTAILED", PowerSetpoint=1260.0, Timestamp="2026-11-25T03:10:40.000Z")
+    entry = {"Kind": "command", "TurbineId": "WT-07", "Ok": True, "Error": "", "Timestamp": "2026-11-25T03:10:08.412Z", "FabricToEdgeSeconds": 4}
+    # 1. The log has it after 10 s, the telemetry after 20: both are said, in that order, and then it is done.
+    state, clock, sleep = _clock()
+    said = []
+    assert center.follow(cmd, {"WT-07": running}, lambda: {"WT-07": limited if state["t"] >= 20 else running}, clock=clock, sleep=sleep,
+                         say=said.append, log=lambda: (True, [entry] if state["t"] >= 10 else [])) is True
+    assert said == ["Waiting for the telemetry to show it: limit of 1260 kW in force on WT-07 (up to 150 s) ...",
+                    "WT-07: the edge took the command 4 s after it was written (at 03:10:08Z), in the log 10 s after the send.",
+                    "WT-07: limit of 1260 kW in force, seen 20 s after the send (state CURTAILED, setpoint 1260 kW, power 3000 kW, reading of 03:10:40Z)."]
+    assert state["t"] == 20
+    # 2. The telemetry is first (the log's row waits in a batch): the wait goes on until the log has it too.
+    state, clock, sleep = _clock()
+    said.clear()
+    assert center.follow(cmd, {"WT-07": running}, lambda: {"WT-07": limited}, clock=clock, sleep=sleep, say=said.append,
+                         log=lambda: (True, [entry] if state["t"] >= 15 else [])) is True
+    assert state["t"] == 15 and "seen 0 s after the send" in said[1] and "in the log 15 s after the send" in said[2]
+    # 3. Refused: the edge's reason, at once, and False.
+    state, clock, sleep = _clock()
+    said.clear()
+    refused = dict(entry, TurbineId="EDGE-01", Ok=False, Error="unknown turbine 'WT-99'; valid: WT-01, WT-02")
+    assert center.follow(cmd, {"WT-07": running}, lambda: {"WT-07": running}, clock=clock, sleep=sleep, say=said.append, log=lambda: (True, [refused])) is False
+    assert said == ["The edge refused the command: unknown turbine 'WT-99'; valid: WT-01, WT-02"] and state["t"] == 0
+    for spelled in (0, "false", "False"):                      # however the database writes a bool
+        said.clear()
+        assert center.follow(cmd, {}, lambda: {}, clock=clock, sleep=sleep, say=said.append, log=lambda: (True, [dict(refused, Ok=spelled)])) is False
+        assert said[0].startswith("The edge refused the command") and state["t"] == 0, spelled
+    # 4. The edge took it, the telemetry never shows it: that is said as such.
+    state, clock, sleep = _clock()
+    said.clear()
+    assert center.follow(cmd, {"WT-07": running}, lambda: {"WT-07": running}, clock=clock, sleep=sleep, say=said.append, limit=20, log=lambda: (True, [entry])) is False
+    assert "WT-07: the edge took it, but the telemetry does not show it after 20 s" in said[-2] and "no entry" not in " ".join(said)
+    # 5. The telemetry shows it, the log never has it: the log's own path is the suspect.
+    state, clock, sleep = _clock()
+    said.clear()
+    assert center.follow(cmd, {"WT-07": running}, lambda: {"WT-07": limited}, clock=clock, sleep=sleep, say=said.append, limit=20, log=lambda: (True, [])) is False
+    text = " ".join(said)
+    assert "WT-07: the telemetry shows it, but the edge's log has no entry for this command after 20 s." in text
+    assert "is the simulator 1.2.0, and does the data flow forward the topic .../command" in text
+    # 6. Already so before, and the log has the entry: settled by the log, without a wait for telemetry.
+    state, clock, sleep = _clock()
+    said.clear()
+    assert center.follow(cmd, {"WT-07": limited}, lambda: pytest.fail("must not read"), clock=clock, sleep=sleep, say=said.append, log=lambda: (True, [entry])) is True
+    assert said == ["WT-07: the edge took the command 4 s after it was written (at 03:10:08Z), in the log 0 s after the send. "
+                    "It was already so before, so the telemetry shows no change."]
+    # 7. All twelve: twelve entries, each said once however often the log is read.
+    state, clock, sleep = _clock()
+    said.clear()
+    everyone = {name: dict(running, TurbineId=name) for name in center.TURBINES}
+    after = {name: dict(limited, TurbineId=name) for name in center.TURBINES}
+    entries = [dict(entry, TurbineId=name) for name in center.TURBINES]
+    assert center.follow(dict(cmd, turbine="all"), everyone, lambda: after if state["t"] >= 10 else everyone, clock=clock, sleep=sleep, say=said.append,
+                         log=lambda: (True, entries)) is True
+    assert sum(1 for line in said if "the edge took the command" in line) == 12 and sum(1 for line in said if ", seen 10 s after" in line) == 12
+    # 8. The clocks of sender and edge differ: no number is made of that.
+    said.clear()
+    center.follow(cmd, {"WT-07": limited}, lambda: {}, say=said.append, log=lambda: (True, [dict(entry, FabricToEdgeSeconds=-2)]))
+    assert said[0].startswith("WT-07: the edge took the command (at 03:10:08Z), in the log")
+
+
+def test_the_command_log_reads_as_a_table():
+    rows = [{"Timestamp": "2026-11-25T04:12:07.000Z", "TurbineId": "WT-03", "Command": "curtail", "Status": "in force", "LimitKw": 1260.0,
+             "EndsAt": "2026-11-25T05:12:07.000Z", "RequestedBy": "operations agent WindFarmGearboxWatch, approved in Teams", "Source": "cloud",
+             "FabricToEdgeSeconds": 3, "EdgeToTelemetrySeconds": 4, "Error": ""},
+            {"Timestamp": "2026-11-25T04:02:00.000Z", "TurbineId": "EDGE-01", "Command": "curtail", "Status": "refused", "LimitKw": None, "EndsAt": None,
+             "RequestedBy": "MOD Administrator", "Source": "cloud", "FabricToEdgeSeconds": 2, "EdgeToTelemetrySeconds": None, "Error": "unknown turbine 'WT-99'"},
+            {"Timestamp": "2026-11-25T03:50:00.000Z", "TurbineId": "WT-08", "Command": "stop", "Status": "confirmed", "LimitKw": None, "EndsAt": None,
+             "RequestedBy": "", "Source": "edge", "FabricToEdgeSeconds": None, "EdgeToTelemetrySeconds": 5, "Error": ""}]
+    text = center.history_table(rows).split("\n")
+    assert text[2].split()[:8] == ["04:12:07", "WT-03", "curtail", "in", "force", "1260", "05:12:07", "3"]
+    assert text[2].endswith("  operations agent WindFarmGearboxWatch, approved in Teams")
+    assert "refused: unknown turbine 'WT-99'" in text[3] and text[3].endswith("MOD Administrator")
+    assert text[4].endswith("  at the edge") and text[4].split()[:4] == ["03:50:00", "WT-08", "stop", "confirmed"]
+    assert len({line.index("  ", 100) for line in text[2:]}) == 1          # the columns line up to the last
+    assert center.history_table([]) == "No command in that time."
+
+
 def test_the_state_of_the_turbines_reads_as_a_table():
     rows = [{"TurbineId": "WT-03", "State": "RUNNING", "PowerSetpoint": 4200.0, "ActivePower": 3629.7, "WindSpeed": 12.96, "GearboxVibration": 5.049,
              "GearboxOilTemp": 81.84, "AgeSeconds": 12, "Timestamp": "2026-11-25T03:10:40Z"},
@@ -179,6 +276,11 @@ def test_the_state_of_the_turbines_reads_as_a_table():
     assert "bash infra/vm.sh status" in center.status_table([])
 
 
+def _seconds(stamp: str) -> float:
+    form = "%Y-%m-%dT%H:%M:%S.%fZ" if "." in stamp else "%Y-%m-%dT%H:%M:%SZ"
+    return datetime.strptime(stamp, form).replace(tzinfo=timezone.utc).timestamp()
+
+
 # --------------------------------------------------------------------- the cells, joined to a simulator
 class Tenant:
     """Stand-ins for Fabric, with a simulator behind the event hub and behind the KQL database."""
@@ -186,7 +288,24 @@ class Tenant:
     def __init__(self, sim, monkeypatch):
         self.sim, self.sent, self.queries, self.kql_error = sim, [], [], None
         self.arrives = True                 # False: the command is lost between the eventstream and the edge
+        self.changed = None                 # a function: what the command looks like when it reaches the edge
+        self.has_log = True                 # False: a KQL database from before Phase 5c, without the table EdgeCommands
+        self.commands, self.readings = [], []
         tenant = self
+        step = sim.step
+
+        def stepped(dt=1.0):                # what the simulator sends is what the KQL database gets
+            out = step(dt)
+            for message in out:
+                kind, payload = message.payload["messageType"], message.payload
+                if kind == "command":
+                    tenant.commands.append(payload)
+                elif kind == "telemetry":
+                    tenant.readings.append({"TurbineId": payload["assetId"], "ReadingAt": _seconds(payload["timestamp"]),
+                                            "State": payload["data"]["state"], "PowerSetpoint": payload["data"]["powerSetpoint"]})
+            return out
+
+        sim.step = stepped
 
         class Response:
             def __init__(self, body, status=200):
@@ -230,8 +349,9 @@ class Tenant:
                 for event in batch:
                     tenant.sent.append(json.loads(event.body))
                     if tenant.arrives:
-                        answer = tenant.sim.handle_command(json.loads(event.body), channel="control")
-                        assert answer["ok"], answer
+                        arrived = json.loads(event.body)
+                        answer = tenant.sim.handle_command(tenant.changed(arrived) if tenant.changed else arrived, channel="control")
+                        assert answer["ok"] or tenant.changed, answer
 
         fabric = types.ModuleType("sempy.fabric")
         fabric.FabricRestClient, fabric.get_workspace_id = Client, lambda: "ws-id"
@@ -267,8 +387,40 @@ class Tenant:
         monkeypatch.setattr(time, "sleep", lambda seconds: [sim.step(1.0) for _ in range(int(seconds))])
         monkeypatch.setattr(time, "monotonic", lambda: sim.t)
 
+    def log_rows(self):
+        """The rows of EdgeCommands, and the same with what became of each command (CommandLog)."""
+        rows = [{"Timestamp": _seconds(p["timestamp"]), "TurbineId": p["assetId"], "RequestId": d["requestId"], "Command": d["command"],
+                 "Ok": d["ok"], "Error": d["error"], "LimitKw": d["limitKw"], "EndsAt": _seconds(d["endsAt"]) if d["endsAt"] else None,
+                 "IssuedAt": _seconds(d["issuedAt"]) if d["issuedAt"] else None, "RequestedBy": d["requestedBy"], "Source": d["source"]}
+                for p in self.commands for d in [p["data"]]]
+        return reference.command_log(rows, self.readings, self.sim.epoch)
+
     def answer(self, query):
-        """What the KQL database would hold: the newest reading of each turbine the query names."""
+        """What the KQL database would hold: the newest reading of each turbine the query names, or the command log."""
+        def table(names, rows):
+            return {"Tables": [{"TableName": "Table_0", "Columns": [{"ColumnName": n} for n in names], "Rows": rows}]}
+
+        def stamp_of(value):
+            return None if value is None else datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+        if query.startswith("union isfuzzy=true"):
+            wanted = query.split("RequestId == '")[1].split("'")[0]
+            names = ["Kind", "TurbineId", "Ok", "Error", "Timestamp", "FabricToEdgeSeconds", "RequestedBy"]
+            if not self.has_log:                  # the fuzzy union leaves out what reads the missing table
+                return table(names, [])
+            rows = [["log", "", None, "", None, None, ""]]
+            rows += [["command", r["TurbineId"], r["Ok"], r["Error"] or "", stamp_of(r["Timestamp"]),
+                      None if r["IssuedAt"] is None else round(r["Timestamp"] - r["IssuedAt"]), r["RequestedBy"]]
+                     for r in self.log_rows() if r["RequestId"] == wanted]
+            return table(names, rows)
+        if query.startswith("CommandLog("):
+            assert self.has_log, "the notebook asked for the command log of a database that has none"
+            names = ["Timestamp", "TurbineId", "Command", "Status", "LimitKw", "EndsAt", "RequestedBy", "Source",
+                     "FabricToEdgeSeconds", "EdgeToTelemetrySeconds", "Error"]
+            rows = [[stamp_of(r["Timestamp"]), r["TurbineId"], r["Command"], r["Status"], r["LimitKw"], stamp_of(r["EndsAt"]), r["RequestedBy"],
+                     r["Source"], None if r["IssuedAt"] is None else round(r["Timestamp"] - r["IssuedAt"]), r["EdgeToTelemetrySeconds"], r["Error"] or ""]
+                    for r in sorted(self.log_rows(), key=lambda r: (-r["Timestamp"], r["TurbineId"])) if f"'{r['TurbineId']}'" in query]
+            return table(names, rows)
         stamp = datetime.fromtimestamp(self.sim.epoch, tz=timezone.utc)
         since = None
         if "datetime(" in query:
@@ -294,7 +446,7 @@ class Tenant:
 
 @pytest.fixture
 def tenant(make_sim, monkeypatch):
-    sim = make_sim(wind=12.0, start_epoch=time.time() - 400)      # telemetry with today's timestamps
+    sim = make_sim(wind=12.0, start_epoch=time.time() - 300)      # after the 300 steps below its clock shows the present
     for _ in range(300):
         sim.step(1.0)
     return Tenant(sim, monkeypatch)
@@ -326,13 +478,34 @@ def test_every_cell_of_the_notebook_does_what_its_heading_says(tenant, capsys):
     assert states["WT-05"] == "MAINTENANCE" and "WT-05: stopped, seen" in out
     out, states, _ = seen['send("start", "WT-05")']
     assert states["WT-05"] != "MAINTENANCE" and "WT-05: running again or free to run, seen" in out
+    # A reset of a turbine that has not tripped changes nothing the telemetry could show. The edge's log settles it.
     out, states, _ = seen['send("reset", "WT-03")']
-    assert "WT-03: already so before the command (state RUNNING" in out and "Waiting" not in out
+    assert "WT-03: the edge took the command" in out and "It was already so before, so the telemetry shows no change." in out
+    assert "Waiting" not in out and "cannot show" not in out
+    # Every command that was sent is first confirmed by the edge, then by the telemetry.
+    for text, (out, _, _) in seen.items():
+        if "dry_run" not in text and "reset" not in text:
+            lines = out.split("\n")
+            took = next(i for i, line in enumerate(lines) if "the edge took the command" in line)
+            assert took < next(i for i, line in enumerate(lines) if ", seen " in line), text
+            assert " s after it was written (at " in lines[took] and "in the log" in lines[took]
     out, _, _ = seen['send("curtail", "all", percent=50, duration="2m", dry_run=True)']
     assert "dry_run: nothing was sent." in out and '"turbine": "all"' in out
     assert [c["command"] for c in tenant.sent] == ["curtail", "release", "stop", "start", "reset"]
     assert all(c["requestedBy"] == "MOD Administrator" for c in tenant.sent)
     assert all(sim.turbines[name].setpoint_kw is None for name in center.TURBINES)       # the dry run for all twelve changed nothing
+    # The command log, as the cell under "The command log" shows it once commands have been sent.
+    namespace["history"]()
+    table = capsys.readouterr().out.split("\n")
+    assert table[0].split()[:6] == ["At", "(UTC)", "Turbine", "Command", "Status", "Limit"] and len({len(line) for line in table[:2]}) == 1
+    rows = [line.split() for line in table[2:] if line]
+    assert [(row[1], row[2]) for row in rows] == [("WT-03", "reset"), ("WT-05", "start"), ("WT-05", "stop"), ("WT-07", "release"), ("WT-07", "curtail")]
+    assert [row[3] for row in rows] == ["confirmed", "confirmed", "confirmed", "confirmed", "ended"] and rows[-1][4] == "1260"
+    assert all(line.endswith("MOD Administrator") for line in table[2:] if line)
+    namespace["history"]("1h", "WT-05")
+    assert [line.split()[2] for line in capsys.readouterr().out.split("\n")[2:] if line] == ["start", "stop"]
+    namespace["history"]("yesterday")
+    assert "Not shown: 'yesterday' is not a time span" in capsys.readouterr().out
 
 
 def test_a_command_that_is_lost_on_the_way_is_noticed(tenant, capsys):
@@ -342,10 +515,48 @@ def test_a_command_that_is_lost_on_the_way_is_noticed(tenant, capsys):
     namespace["send"]("curtail", "WT-07", percent=30, duration="10m")
     out = capsys.readouterr().out
     assert "Sent: curtail for WT-07" in out and "WT-07: not seen after 150 s (state RUNNING, setpoint 4200 kW" in out
-    assert "docs/12-deployment-guide-phase5a.md" in out and tenant.sim.turbines["WT-07"].setpoint_kw is None
-    # After the send only readings taken since the command was written are asked for.
-    assert tenant.queries[-1].count(f"Timestamp >= datetime({namespace['last_command']['issuedAt']})") == 1
-    assert "ago(5m)" in next(q for q in tenant.queries if "GearboxVibration" not in q)
+    assert "The edge's log has no entry for this command." in out and "the edge took" not in out
+    assert "docs/14-deployment-guide-phase5c.md" in out and "docs/12-deployment-guide-phase5a.md" in out
+    assert tenant.sim.turbines["WT-07"].setpoint_kw is None
+    # After the send only readings taken since the command was written are asked for, and only this command's log.
+    readings = [q for q in tenant.queries if q.startswith("TurbineTelemetry") and "GearboxVibration" not in q]
+    assert "ago(5m)" in readings[0] and all(q.count(f"Timestamp >= datetime({namespace['last_command']['issuedAt']})") == 1 for q in readings[1:])
+    asked = [q for q in tenant.queries if q.startswith("union isfuzzy=true")]
+    assert len(asked) == len(readings) - 1 and all(f"RequestId == '{namespace['last_command']['requestId']}'" in q for q in asked)
+
+
+def test_a_command_the_edge_refuses_is_said_with_the_edges_reason(tenant, capsys):
+    namespace = tenant.start()
+    capsys.readouterr()
+    # The notebook's own check lets only good commands out, so the test changes one on the way.
+    tenant.changed = lambda cmd: {**cmd, "turbine": "WT-99"}
+    namespace["send"]("curtail", "WT-07", percent=30, duration="10m")
+    out = capsys.readouterr().out
+    assert "The edge refused the command: unknown turbine 'WT-99'" in out
+    assert "not seen after" not in out and "If something fails" not in out          # the answer is in: nothing is waited out
+    assert tenant.sim.turbines["WT-07"].setpoint_kw is None and tenant.sim.t < 330
+    namespace["history"]()
+    line = next(line for line in capsys.readouterr().out.split("\n") if "EDGE-01" in line)
+    assert "refused: unknown turbine 'WT-99'" in line
+
+
+def test_on_a_database_without_the_command_log_the_notebook_follows_the_telemetry_only(tenant, capsys):
+    tenant.has_log = False
+    namespace = tenant.start()
+    capsys.readouterr()
+    namespace["send"]("curtail", "WT-07", percent=30, duration="10m")
+    out = capsys.readouterr().out
+    assert out.count("This database has no command log yet (Phase 5c: run block 1 of fabric/kql/07-command-log.kql).") == 1
+    assert "Only the telemetry can show what became of this command." in out
+    assert "WT-07: limit of 1260 kW in force, seen" in out and "the edge" not in out.split("Only the telemetry")[1]
+    assert len([q for q in tenant.queries if q.startswith("union isfuzzy=true")]) == 1   # asked once, then left alone
+    # What the telemetry cannot show stays unknown, and is said to be.
+    namespace["send"]("reset", "WT-03")
+    out = capsys.readouterr().out
+    assert "WT-03: already so before the command (state RUNNING" in out and "cannot show whether this command arrived" in out
+    namespace["history"]()
+    assert capsys.readouterr().out.strip() == "This database has no command log yet (Phase 5c: run block 1 of fabric/kql/07-command-log.kql)."
+    assert not [q for q in tenant.queries if q.startswith("CommandLog(")]
 
 
 def test_what_the_notebook_refuses_is_said_and_not_sent(tenant, capsys):

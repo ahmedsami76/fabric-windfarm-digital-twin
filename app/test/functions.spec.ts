@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { type Access, FabricError, brief, clearLookup, lookup, lookupLakehouse } from '../overlay/packages/functions/src/fabric';
 import { KustoError, rowsOf } from '../overlay/packages/functions/src/kusto';
 import {
-  ALARMS_QUERY, DELAY_QUERY, SQL_ALARMS, SQL_PROBE, SQL_TURBINES, SQL_WEATHER, TELEMETRY_COLUMNS, TURBINES_QUERY, WEATHER_QUERY,
-  type SqlConnect, checkEventhouse, checkLakehouse, currentDatabase, currentSqlDatabase, delayText, liveFromEventhouse, liveFromLakehouse, resetRoute,
-  sqlTrendQuery, toTurbine, trendFromEventhouse, trendFromLakehouse, trendQuery,
+  ALARMS_QUERY, COMMANDS_QUERY, DELAY_QUERY, SQL_ALARMS, SQL_PROBE, SQL_TURBINES, SQL_WEATHER, TELEMETRY_COLUMNS, TURBINES_QUERY, WEATHER_QUERY,
+  type SqlConnect, checkEventhouse, checkLakehouse, commandLogProblem, commandsFromEventhouse, currentDatabase, currentSqlDatabase, delayText, liveFromEventhouse,
+  liveFromLakehouse, resetRoute, sqlTrendQuery, toCommand, toTurbine, trendFromEventhouse, trendFromLakehouse, trendQuery,
 } from '../overlay/packages/functions/src/live';
 import { NoPrincipal, type Principal, PrincipalRefused, SecretsUnreadable, clearPrincipalToken, principalToken, readPrincipal } from '../overlay/packages/functions/src/principal';
 import { plainRows } from '../overlay/packages/functions/src/sql';
@@ -77,6 +77,7 @@ function fabric(fake: Fake = {}): { access: Access; calls: string[] } {
       if (body.csl.startsWith('WeatherObservations')) return json(table(['Timestamp', 'WindSpeed', 'WindDirection', 'WindGust', 'AmbientTemp', 'AirDensity'], [[null, null, null, null, null, null]]));
       if (body.csl.includes('summarize ActivePower = avg(ActivePower)')) return json(table(['Timestamp', 'ActivePower', 'WindSpeed', 'RotorSpeed', 'GearboxOilTemp', 'GearboxBearingTemp', 'GearboxVibration'], [['2026-11-21T17:00:00Z', 1000, 7, 9, 50, 55, 2]]));
       if (body.csl === DELAY_QUERY) return json(table(['Rows', 'Median', 'P95', 'Highest'], [[2160, 23, 31.4, 44]]));
+      if (body.csl === COMMANDS_QUERY) return json(table(COMMAND_COLUMNS, COMMAND_ROWS));
       return json(table(['Rows', 'Turbines', 'Newest'], [[24, 12, '2026-11-21T18:00:10Z']]));
     }
     return new Response('not found', { status: 404 });
@@ -85,6 +86,17 @@ function fabric(fake: Fake = {}): { access: Access; calls: string[] } {
 }
 
 const PRINCIPAL_TOKEN = 'principal-token-for-https://kusto.kusto.windows.net/.default';
+
+/** What the function CommandLog of the KQL database returns: its columns, in its order (fabric/kql/07-command-log.kql). */
+const COMMAND_COLUMNS = ['Timestamp', 'TurbineId', 'Command', 'Status', 'Percent', 'LimitKw', 'RequestedBy', 'Source', 'IssuedAt', 'ConfirmedAt', 'EndedAt', 'EndsAt',
+  'FabricToEdgeSeconds', 'EdgeToTelemetrySeconds', 'DurationSeconds', 'Reason', 'Error', 'RequestId'];
+const AGENT = 'operations agent WindFarmGearboxWatch, approved in Teams';
+const COMMAND_ROWS: unknown[][] = [
+  ['2026-11-21T17:59:02.412Z', 'WT-02', 'curtail', 'in force', 30, 1260, AGENT, 'cloud', '2026-11-21T17:58:59Z', '2026-11-21T17:59:05Z', null, '2026-11-21T18:59:02.412Z', 3, 3, 3600, null, null, 'a1b2c3d4e5f6'],
+  ['2026-11-21T17:40:00Z', 'EDGE-01', 'curtail', 'refused', null, null, 'MOD Administrator', 'cloud', '2026-11-21T17:39:58Z', null, null, null, 2, null, null, null, "unknown turbine 'WT-99'", 'ffff00001111'],
+  ['2026-11-21T17:30:00Z', 'WT-08', 'STOP', 'confirmed', null, null, null, 'edge', null, '2026-11-21T17:30:05Z', null, null, null, 5, null, 'maintenance', null, ''],
+];
+const NO_COMMAND_LOG = (): Response => json({ error: { message: "Semantic error: 'CommandLog' could not be resolved to a table, a function or a variable" } }, 400);
 
 /** A pretend SQL endpoint: remembers where it was opened and what it was asked. */
 function lakehouse(answers: (statement: string) => Record<string, unknown>[] = () => []): { connect: SqlConnect; opened: string[]; asked: string[] } {
@@ -251,7 +263,7 @@ describe('the live values from the Eventhouse', () => {
     await liveFromEventhouse(access, principal);
     expect(currentDatabase()).toBe('WindFarmEH');
     const queries = calls.filter((c) => c.includes('/v1/rest/query'));
-    expect(queries).toHaveLength(3);
+    expect(queries).toHaveLength(4); // turbines, alarms, met mast, command log
     expect(queries.every((c) => c.endsWith(`[${PRINCIPAL_TOKEN}]`))).toBe(true);
   });
 
@@ -276,6 +288,92 @@ describe('the live values from the Eventhouse', () => {
     const { access, calls } = fabric({ kusto: () => json({ error: { message: 'Semantic error: unknown column' } }, 400) });
     await expect(liveFromEventhouse(access, principal)).rejects.toThrow(/Semantic error/);
     expect(calls.filter((c) => c.includes('/v1/rest/query'))).toHaveLength(1);
+  });
+});
+
+describe('the command log', () => {
+  it('comes with the live values: who limited a turbine, until when, and what the telemetry showed', async () => {
+    const state = await liveFromEventhouse(fabric().access, principal);
+    expect(state.commands).toHaveLength(3);
+    expect(state.commands![0]).toEqual({
+      requestId: 'a1b2c3d4e5f6', turbineId: 'WT-02', command: 'curtail', status: 'in force', at: '2026-11-21T17:59:02.412Z', requestedBy: AGENT, origin: 'cloud',
+      limitKw: 1260, percent: 30, endsAt: '2026-11-21T18:59:02.412Z', confirmedAt: '2026-11-21T17:59:05Z', endedAt: '', error: '',
+    });
+    expect(state.commands![1]).toMatchObject({ turbineId: 'EDGE-01', status: 'refused', limitKw: null, percent: null, error: "unknown turbine 'WT-99'", endsAt: '', confirmedAt: '' });
+    expect(state.commands![2]).toMatchObject({ command: 'stop', origin: 'edge', requestedBy: '', requestId: '' });
+    expect(commandLogProblem()).toBeNull();
+    // Every field comes from a column the function of the KQL database returns.
+    const kql = readFileSync(`${here}../../fabric/kql/07-command-log.kql`, 'utf8');
+    const projected = /\| project (Timestamp, TurbineId, Command, Status[^\n]*)\n\}/.exec(kql)?.[1].split(', ') ?? [];
+    expect(projected).toEqual(COMMAND_COLUMNS);
+    const row = Object.fromEntries(COMMAND_COLUMNS.map((c, i) => [c, `value-${i}`]));
+    const used = Object.values(toCommand(row)).filter((v): v is string => typeof v === 'string' && v.startsWith('value-'));
+    expect(used.length).toBeGreaterThanOrEqual(9);
+    expect(COMMANDS_QUERY).toMatch(/^CommandLog\(24h\)\n/);
+  });
+
+  it('is asked of the database under the name the other queries settled', async () => {
+    const asked: string[] = [];
+    const note = (_t: string, db: string, csl: string): undefined => void (csl === COMMANDS_QUERY && asked.push(db));
+    await liveFromEventhouse(fabric({ kusto: note }).access, principal);
+    clearLookup();
+    resetRoute();
+    const byId = fabric({ kusto: (t, db, csl) => (db === 'WindFarmEH' ? json({ error: { message: "Database 'WindFarmEH' could not be found" } }, 400) : note(t, db, csl)) });
+    expect((await liveFromEventhouse(byId.access, principal)).commands).toHaveLength(3);
+    expect(asked).toEqual(['WindFarmEH', 'kql-id']);
+  });
+
+  it('is left out, and the turbines are still shown, on a KQL database from before Phase 5c', async () => {
+    const { access, calls } = fabric({ kusto: (_t, _d, csl) => (csl === COMMANDS_QUERY ? NO_COMMAND_LOG() : undefined) });
+    const state = await liveFromEventhouse(access, principal);
+    expect(state.commands).toBeNull();
+    expect(state.turbines).toHaveLength(3);
+    expect(state.alarms).toHaveLength(1);
+    expect(currentDatabase()).toBe('WindFarmEH'); // the refusal did not unsettle the route
+    expect(commandLogProblem()).toMatch(/answered 400: .*CommandLog/);
+    // A query the database cannot run is not sent again with every poll.
+    const asked = (): number => calls.filter((c) => c.includes('/v1/rest/query')).length;
+    expect(asked()).toBe(4);
+    await liveFromEventhouse(access, principal);
+    expect(asked()).toBe(7);
+  });
+
+  it('is asked for again after five minutes, and at once after a failure that may pass', async () => {
+    const found = await lookup(fabric().access);
+    let answer: () => Response = NO_COMMAND_LOG;
+    const { access, calls } = fabric({ kusto: (_t, _d, csl) => (csl === COMMANDS_QUERY ? answer() : undefined) });
+    const t0 = Date.parse('2026-11-21T18:00:00Z');
+    expect(await commandsFromEventhouse(access, found, 'token', t0)).toBeNull();
+    expect(await commandsFromEventhouse(access, found, 'token', t0 + 4 * 60_000)).toBeNull();
+    expect(calls).toHaveLength(1);
+    answer = () => json(table(COMMAND_COLUMNS, COMMAND_ROWS));
+    expect(await commandsFromEventhouse(access, found, 'token', t0 + 5 * 60_000 + 1)).toHaveLength(3); // the log was created in the meantime
+    answer = () => new Response('busy', { status: 503 });
+    expect(await commandsFromEventhouse(access, found, 'token', t0 + 6 * 60_000)).toBeNull();
+    answer = () => json(table(COMMAND_COLUMNS, []));
+    expect(await commandsFromEventhouse(access, found, 'token', t0 + 6 * 60_000 + 5000)).toEqual([]); // no command is not "no log"
+  });
+
+  it('is read once in fifteen seconds, however often the page asks', async () => {
+    const found = await lookup(fabric().access);
+    const { access, calls } = fabric();
+    const t0 = Date.parse('2026-11-21T18:00:00Z');
+    const first = await commandsFromEventhouse(access, found, 'token', t0);
+    expect(await commandsFromEventhouse(access, found, 'token', t0 + 5000)).toBe(first);
+    expect(await commandsFromEventhouse(access, found, 'token', t0 + 14_999)).toBe(first);
+    expect(calls).toHaveLength(1);
+    expect(await commandsFromEventhouse(access, found, 'token', t0 + 15_000)).toEqual(first);
+    expect(calls).toHaveLength(2);
+    // The connection check asks the database itself, whatever is kept.
+    const steps = await checkEventhouse(access, principal, t0 + 16_000);
+    expect(steps.at(-1)).toMatchObject({ step: 'Eventhouse route: command log', ok: true });
+    expect(calls.filter((c) => c.includes('/v1/rest/query'))).toHaveLength(2 + 3); // the two before, then the check's own: telemetry, delay, command log
+  });
+
+  it('is not read on the Lakehouse route', async () => {
+    const state = await liveFromLakehouse(fabric().access, () => 'sql-token', lakehouse(copies).connect);
+    expect(state.commands).toBeNull();
+    expect(state.turbines).toHaveLength(2);
   });
 });
 
@@ -392,8 +490,9 @@ describe('the connection check', () => {
       'PASS Functions of the Eventhouse route',
       'PASS Token for the Fabric API', 'PASS Workspace and KQL database', 'PASS Data agent, for the chat',
       'PASS Eventhouse route: service principal', 'PASS Eventhouse route: token from Microsoft Entra ID', 'PASS Eventhouse route: query',
-      'PASS Eventhouse route: delay from turbine to database',
+      'PASS Eventhouse route: delay from turbine to database', 'PASS Eventhouse route: command log',
     ]);
+    expect(steps[8].detail).toBe('3 lines in the last 24h, 1 limit in force');
     expect(steps[0].detail).toMatch(/^build [0-9a-f]{12}$/);
     expect(steps[4].detail).toBe(`application ${CLIENT} in tenant ${TENANT}`);
     expect(steps[6].detail).toMatch(/24 rows from 12 turbines in the last 2 minutes; newest 10 s old/);
@@ -403,12 +502,19 @@ describe('the connection check', () => {
 
   it('measures the delay only when there is telemetry, and a measurement that fails is no failure of the route', async () => {
     const silent = await checkEventhouse(fabric({ kusto: (_t, _d, csl) => (csl === DELAY_QUERY ? undefined : json(table(['Rows', 'Turbines', 'Newest'], [[0, 0, null]]))) }).access, principal);
-    expect(lines(silent).slice(-1)).toEqual(['FAIL Eventhouse route: query']);
-    expect(silent.at(-1)!.detail).toMatch(/no telemetry in the last 2 minutes.*edge VM is stopped \(the VM has a daily shutdown\)/);
+    expect(lines(silent).slice(-2, -1)).toEqual(['FAIL Eventhouse route: query']);
+    expect(lines(silent).some((l) => l.includes('delay from turbine'))).toBe(false);
+    expect(silent.at(-2)!.detail).toMatch(/no telemetry in the last 2 minutes.*edge VM is stopped \(the VM has a daily shutdown\)/);
     clearLookup();
     const refused = await checkEventhouse(fabric({ kusto: (_t, _d, csl) => (csl === DELAY_QUERY ? new Response('{"error":{"message":"Semantic error: IngestedAt"}}', { status: 400 }) : undefined) }).access, principal);
-    expect(lines(refused).slice(-2)).toEqual(['PASS Eventhouse route: query', 'SKIP Eventhouse route: delay from turbine to database']);
-    expect(refused.at(-1)!.detail).toMatch(/^not measured: /);
+    expect(lines(refused).slice(-3)).toEqual(['PASS Eventhouse route: query', 'SKIP Eventhouse route: delay from turbine to database', 'PASS Eventhouse route: command log']);
+    expect(refused.at(-2)!.detail).toMatch(/^not measured: /);
+    // A database without the command log: said, with what creates it, and not counted as a failure of the route.
+    clearLookup();
+    const without = await checkEventhouse(fabric({ kusto: (_t, _d, csl) => (csl === COMMANDS_QUERY ? NO_COMMAND_LOG() : undefined) }).access, principal);
+    expect(lines(without).slice(-1)).toEqual(['SKIP Eventhouse route: command log']);
+    expect(without.at(-1)!.detail).toMatch(/the twin shows no commands\. Phase 5c creates it: block 1 of fabric\/kql\/07-command-log\.kql\. The database said: .*400/);
+    expect(lines(without).filter((l) => l.startsWith('FAIL'))).toEqual([]);
     expect(delayText({})).toBe('median ? s, 95 % of the rows within ? s, highest ? s, over the ? rows of the last 15 minutes');
   });
 
@@ -480,7 +586,7 @@ describe('the build stamp', () => {
 describe('the queries', () => {
   it('are the ones in the repository, where they can be run by hand', () => {
     const kql = readFileSync(`${here}../../fabric/kql/94-twin-app-queries.kql`, 'utf8').replace(/\r/g, '');
-    for (const query of [TURBINES_QUERY, ALARMS_QUERY, WEATHER_QUERY, trendQuery('WT-07', 60), DELAY_QUERY]) expect(kql).toContain(query);
+    for (const query of [TURBINES_QUERY, ALARMS_QUERY, WEATHER_QUERY, trendQuery('WT-07', 60), DELAY_QUERY, COMMANDS_QUERY]) expect(kql).toContain(query);
     const sql = readFileSync(`${here}../../fabric/sql/94-twin-app-queries.sql`, 'utf8').replace(/\r/g, '');
     for (const query of [SQL_TURBINES, SQL_ALARMS, SQL_WEATHER, sqlTrendQuery('WT-07', 60), SQL_PROBE]) expect(sql).toContain(query);
   });

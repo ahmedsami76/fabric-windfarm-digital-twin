@@ -12,7 +12,8 @@
           "contoso/windfarm/+/+/alarm",
           "contoso/windfarm/+/+/state",
           "contoso/windfarm/+/+/asset",
-          "contoso/windfarm/+/+/heartbeat"
+          "contoso/windfarm/+/+/heartbeat",
+          "contoso/windfarm/+/+/command"
         ]
       }
     },

@@ -81,6 +81,8 @@ class Simulator:
         self._next_spontaneous = self._draw_spontaneous_gap()
         self._seq: dict[str, int] = {}
         self.published = 0
+        # The command log: one entry per turbine an operating command acted on, sent with the next step.
+        self._command_log: list[tuple[str, str, dict]] = []
         self.ground_truth: list[dict] = []   # anomaly lifecycle, never sent to the cloud
         log.info("simulator ready: site=%s turbines=%d seed=%d", site.site_id, len(self.turbines), self.seed)
 
@@ -203,6 +205,12 @@ class Simulator:
                                    self._envelope(ev["messageType"], tid, ev["timestamp"], ev["data"])))
             turbine.events.clear()
 
+        # The command log goes out at once, also for a turbine that is offline: it is the controller's
+        # record of what it was told, not a reading of the turbine.
+        for asset, stamp, data in self._command_log:
+            out.append(Message(self.topic(asset, "command"), self._envelope("command", asset, stamp, data)))
+        self._command_log.clear()
+
         if now >= self._due["telemetry"]:
             self._due["telemetry"] = now + self.cfg.telemetry_interval_s
             for tid, turbine in self.turbines.items():
@@ -311,12 +319,55 @@ class Simulator:
             if name not in allowed:
                 raise ValueError(f"unknown command '{name}'; valid: {', '.join(sorted(allowed))}")
             result = getattr(self, f"_cmd_{name}")(cmd)
+            if name in CONTROL_COMMANDS:
+                self._log_command(name, cmd, channel, result=result)
             return {"requestId": request_id, "command": name, "ok": True,
                     "timestamp": iso(self.epoch), "result": result}
         except (ValueError, KeyError, TypeError) as exc:
             log.warning("command rejected: %s (%s)", cmd, exc)
+            if name in CONTROL_COMMANDS or channel == "control":
+                self._log_command(name, cmd, channel, error=str(exc))
             return {"requestId": request_id, "command": name, "ok": False,
                     "timestamp": iso(self.epoch), "error": str(exc)}
+
+    def _log_command(self, name: str, cmd: dict, channel: str, result: dict | None = None, error: str = "") -> None:
+        """Note an operating command for the command log: what was asked, by whom, and what became of it.
+
+        A turbine controller keeps such a log of every setpoint and stop it is given. Here it is one
+        message of type ``command`` per turbine the command acted on, sent with the telemetry, so that
+        the cloud can tell who limited a turbine and whether the plant took the command. A command that
+        was refused is logged once, under the edge itself unless it named an existing turbine.
+        Commands that only the simulator has (inject, wind, status) are not operating commands and
+        are not logged; one of them arriving on the control topic is logged as refused.
+        """
+        ts = iso(self.epoch)
+        targets = next((v for k, v in (result or {}).items()
+                        if k in ("curtailed", "released", "stopped", "started", "reset")), None)
+        if targets is None:
+            named = str(cmd.get("turbine", "")).upper()
+            targets = [named] if named in self.turbines else [EDGE_ASSET_ID]
+        duration = (result or {}).get("durationSeconds")
+        base = {
+            "requestId": str(cmd.get("requestId") or ""),
+            "command": name,
+            "source": "cloud" if channel == "control" else "edge",
+            "requestedBy": str(cmd.get("requestedBy") or "")[:120],
+            "issuedAt": str(cmd.get("issuedAt") or "") or None,
+            "ok": not error,
+            "error": error[:300] or None,
+            "percent": None, "limitKw": None,
+            "durationSeconds": duration,
+            "endsAt": None if duration is None else iso(self.epoch + duration),
+            "reason": (str(cmd.get("reason") or cmd.get("note") or "")[:200] or None),
+            "turbinesInCommand": len(targets) if not error else 0,
+        }
+        for asset in targets:
+            data = dict(base)
+            if name == "curtail" and not error and asset in self.turbines:
+                percent = float(cmd["percent"])
+                data["percent"] = percent
+                data["limitKw"] = round(self.turbines[asset].model.rated_power_kw * percent / 100.0, 1)
+            self._command_log.append((asset, ts, data))
 
     def _cmd_inject(self, cmd: dict) -> dict:
         kind = str(cmd.get("kind", "gearbox_degradation"))

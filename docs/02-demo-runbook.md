@@ -143,6 +143,8 @@ sim start WT-07                                 # return it to service
 sim reset WT-07                                 # clear a latched trip or derate
 ```
 
+Since simulator 1.2.0 (Phase 5c) the edge reports each of these to Fabric, whoever gave it: the table `EdgeCommands` holds one row per turbine and command, and `CommandLog(1h)` in the KQL database says what became of each. A command given here shows there with `Source` = `edge`. A restart of the simulator ends every limit and stop that was set.
+
 ## What is fixed and what varies
 
 | What | Behaviour | How to control it |

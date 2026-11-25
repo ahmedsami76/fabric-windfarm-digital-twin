@@ -14,6 +14,7 @@ All topics start with `contoso/windfarm/{siteId}`. The site in this repository i
 | `…/{assetId}/asset` | `asset` | Simulator | At start and every 5 min | Yes | Yes |
 | `…/MET-01/weather` | `weather` | Simulator | Every 10 s | No | Yes |
 | `…/EDGE-01/heartbeat` | `heartbeat` | Simulator | Every 60 s | No | Yes |
+| `…/{turbineId}/command` | `command` | Simulator, since version 1.2.0 (Phase 5c) | When an operating command was taken or refused: one message for each turbine it acted on | No | Yes |
 | `…/_sim/request` | Command | `simctl` | On demand | No | No |
 | `…/_sim/response/{requestId}` | Acknowledgement | Simulator | Per command | No | No |
 | `…/_sim/status` | Simulator status | Simulator | Every 30 s | Yes | No |
@@ -173,6 +174,30 @@ Lands in `EdgeHeartbeats`.
 | `uptimeSeconds` | Seconds since the simulator started |
 | `turbinesReporting`, `turbinesTotal` | Turbines currently communicating, and the total |
 | `messagesPublished` | Messages published since start |
+
+## command
+
+The edge's record of an operating command, since simulator 1.2.0. Lands in `EdgeCommands`; the function `CommandLog()` puts each row next to what the telemetry showed afterwards (`fabric/kql/07-command-log.kql`, [14-deployment-guide-phase5c.md](14-deployment-guide-phase5c.md)).
+
+One message for each turbine a `curtail`, `release`, `stop`, `start` or `reset` acted on, whether it came from Fabric over `…/_control/request` or from `simctl`. A command to all turbines gives twelve messages with one `requestId`. A refused command gives one message: under the turbine it named, or under `EDGE-01` when it named none that exists. `inject`, `resolve`, `wind` and `status` are not operating commands and are not reported, except that one of them arriving on `…/_control/request` is reported as refused. The envelope's `timestamp` is when the edge handled the command.
+
+| Field | Column | Meaning |
+|---|---|---|
+| `requestId` | `RequestId` | The identifier the sender gave the command |
+| `command` | `Command` | `curtail`, `release`, `stop`, `start` or `reset` |
+| `source` | `Source` | `cloud`: it came over the control topic. `edge`: it was given at the edge |
+| `requestedBy` | `RequestedBy` | Who asked, as the sender wrote it; at most 120 characters. Empty when the command did not say |
+| `issuedAt` | `IssuedAt` | When the sender wrote the command, by the sender's clock. Null for commands given at the edge |
+| `ok` | `Ok` | True: taken. False: refused |
+| `error` | `Error` | Why it was refused |
+| `percent`, `limitKw` | `Percent`, `LimitKw` | `curtail`: the share of rated power the turbine may still produce, and the same in kW |
+| `durationSeconds`, `endsAt` | `DurationSeconds`, `EndsAt` | `curtail`, `stop`: how long it lasts and when it ends by itself. Null: until released or started |
+| `reason` | `Reason` | `stop`: `operator` or `maintenance`. Otherwise a note that came with the command |
+| `turbinesInCommand` | `TurbinesInCommand` | How many turbines the command acted on; 0 for a refused one |
+
+```json
+{"messageType":"command","schemaVersion":"1.0","siteId":"northwind-ridge","assetId":"WT-03","timestamp":"2026-11-25T04:12:07.412Z","seq":5121,"data":{"requestId":"a1b2c3d4e5f6","command":"curtail","source":"cloud","requestedBy":"operations agent WindFarmGearboxWatch, approved in Teams","issuedAt":"2026-11-25T04:12:04Z","ok":true,"error":null,"percent":30.0,"limitKw":1260.0,"durationSeconds":3600,"endsAt":"2026-11-25T05:12:07.412Z","reason":null,"turbinesInCommand":1}}
+```
 
 ## Commands
 

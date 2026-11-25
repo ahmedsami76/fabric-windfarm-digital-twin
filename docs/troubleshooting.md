@@ -489,10 +489,23 @@ The table "If something fails" at the end of [11-deployment-guide-phase4.md](11-
 
 ## Phase 5
 
-Each of the two guides ends with a table "If something fails" that follows the command along its way, hop by hop: [12-deployment-guide-phase5a.md](12-deployment-guide-phase5a.md) from the notebook to the turbine, [13-deployment-guide-phase5b.md](13-deployment-guide-phase5b.md) from the table the agent watches to the approval. Three commands say where things stand without changing anything:
+Each of the three guides ends with a table "If something fails" that follows the command along its way, hop by hop: [12-deployment-guide-phase5a.md](12-deployment-guide-phase5a.md) from the notebook to the turbine, [13-deployment-guide-phase5b.md](13-deployment-guide-phase5b.md) from the table the agent watches to the approval, [14-deployment-guide-phase5c.md](14-deployment-guide-phase5c.md) from the edge's record back to the command center and the twin. Three commands say where things stand without changing anything:
 
 - `bash infra/08-create-command-path.sh --show`: the eventstream, what the edge reads from, the endpoint and the data flow.
 - `bash infra/09-remediation-agent.sh --show`: the operations agent as Fabric has it, its instructions, its action and the action's values, and what differs from Phase 5b.
 - `bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh status`: the turbines, their states and the active faults, on the edge.
 
 When an approved action changes nothing, run `bash infra/09-remediation-agent.sh --rehearse WT-07`. It runs the action's notebook as a job without the agent. If the turbine follows, the fault is on the agent's side of the approval; if not, on the notebook's.
+
+Since Phase 5c the edge keeps a record, and it is the quickest way to tell which half of the loop is broken. In a query window on `WindFarmEH`:
+
+```kusto
+CommandLog(1h) | order by Timestamp desc
+```
+
+- **The command is there, `in force` or `confirmed`.** It arrived and the turbine followed. If something still looks wrong, it is in what shows it: the twin's connection check, or the browser's page being older than the functions.
+- **The command is there, `refused`.** The column `Error` is the edge's reason.
+- **The command is there, `taken by the edge, never seen in telemetry`.** The edge took it and the turbine's readings did not show it within five minutes. A turbine that does not report (a communication loss) is the usual case.
+- **The command is not there, and the telemetry shows it.** The command arrived; the record did not come back. The simulator must be 1.2.0 (`simctl.sh status`) and the data flow must forward seven topics (`cat edge/dataflows/rendered/windfarm-to-fabric.json` after `bash infra/06-connect-edge-to-fabric.sh`).
+- **The command is not there, and nothing changed.** It did not reach the edge: the table at the end of the Phase 5a guide, hop by hop.
+- **The query itself fails.** Block 1 of `fabric/kql/07-command-log.kql` has not run in this database.

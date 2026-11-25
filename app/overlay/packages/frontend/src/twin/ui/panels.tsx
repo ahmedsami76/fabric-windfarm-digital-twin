@@ -1,12 +1,13 @@
 /**
- * The panels that lie over the 3D scene: the fleet list, the panel of one turbine, the alarms and
- * the connection check.
+ * The panels that lie over the 3D scene: the fleet list, the panel of one turbine, the alarms with
+ * the commands, and the connection check.
  */
 import { useEffect, useState } from 'react';
 
 import { PAGE_BUILD } from '../data/build';
+import { type LimitView, askedBy, commandWords, groupCommands, groupTarget, limitOf, limitText, statusLevel } from '../data/commands';
 import { type PartKey, componentQuestion, componentStatus, gearboxCondition } from '../data/components';
-import type { Alarm, DiagnosticStep, LiveState, TrendPoint, TurbineLive } from '../data/contract';
+import type { Alarm, CommandEntry, DiagnosticStep, LiveState, TrendPoint, TurbineLive } from '../data/contract';
 import type { TwinDataProvider } from '../data/provider';
 import { ALARM_OIL_TEMP, ALARM_VIBRATION, EARLY_OIL_TEMP, EARLY_VIBRATION, SITE, WATCH_YAW_ERROR } from '../data/site';
 import { STATE_COLOR } from '../scene/turbine';
@@ -90,10 +91,57 @@ function Tile({ label, value, unit, level = 0 }: { label: string; value: string;
   );
 }
 
+/** What holds the turbine below its rated power, and who asked for it. */
+function LimitCard({ view, now, route, activePowerKw }: { view: LimitView; now: number; route: string; activePowerKw: number }) {
+  const { title, lines } = limitText(view, now, clock, route, activePowerKw);
+  return (
+    <div className={`twin-limit ${view.kind}`} role="status">
+      <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
+        <path d="M2 4.5h14M9 7.5v7M5.6 11.3 9 14.7l3.4-3.4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <div>
+        <b>{title}</b>
+        {lines.map((line) => (
+          <span key={line}>{line}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** The last commands of one turbine, from the edge's command log. */
+function TurbineCommands({ commands }: { commands: CommandEntry[] }) {
+  if (commands.length === 0) return null;
+  return (
+    <>
+      <h3>
+        Commands, last 24 hours <small>from the command log of the edge</small>
+      </h3>
+      <ul className="twin-commands inline">
+        {commands.slice(0, 4).map((c) => (
+          <li key={`${c.requestId}-${c.at}-${c.command}`} className={`level${statusLevel(c.status)}`}>
+            <b>{commandWords(c)}</b> <em>{c.status}</em>
+            <small>
+              {clock(c.at)} · {askedBy(c)}
+              {c.error ? ` · ${c.error}` : ''}
+            </small>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 interface TurbinePanelProps {
   turbine: TurbineLive | undefined;
   turbineId: string;
   alarms: Alarm[];
+  /** The edge's command log, or null when this route cannot read it. */
+  commands: CommandEntry[] | null;
+  /** Where the live values come from, for what the panel says when the log is missing. */
+  route: string;
+  /** The time, for "ends in 12 min". */
+  now: number;
   provider: TwinDataProvider;
   /** The turbine is shown taken apart; the panel then lists its components. */
   exploded: boolean;
@@ -133,7 +181,7 @@ function ComponentList({ turbine, turbineId, alarms, hotPart, onHotPart, onAsk }
   );
 }
 
-export function TurbinePanel({ turbine, turbineId, alarms, provider, exploded, onExplode, hotPart, onHotPart, onClose, onAsk }: TurbinePanelProps) {
+export function TurbinePanel({ turbine, turbineId, alarms, commands, route, now, provider, exploded, onExplode, hotPart, onHotPart, onClose, onAsk }: TurbinePanelProps) {
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [trendError, setTrendError] = useState<string | null>(null);
 
@@ -163,6 +211,8 @@ export function TurbinePanel({ turbine, turbineId, alarms, provider, exploded, o
   const t = turbine;
   const vibrationLevel = t ? (t.gearboxVibration >= ALARM_VIBRATION ? 2 : t.gearboxVibration >= EARLY_VIBRATION ? 1 : 0) : 0;
   const oilLevel = t ? (t.gearboxOilTemp >= ALARM_OIL_TEMP ? 2 : t.gearboxOilTemp >= EARLY_OIL_TEMP ? 1 : 0) : 0;
+  const limit = limitOf(t, commands, RATED, alarms);
+  const mine = (commands ?? []).filter((c) => c.turbineId === turbineId);
   return (
     <aside className="twin-panel twin-turbine" aria-label={`Turbine ${turbineId}`}>
       <header>
@@ -183,6 +233,7 @@ export function TurbinePanel({ turbine, turbineId, alarms, provider, exploded, o
           <span>MW · {Math.round((t.activePower / RATED) * 100)}% of rated</span>
         </div>
       ) : null}
+      {limit && t ? <LimitCard view={limit} now={now} route={route} activePowerKw={t.activePower} /> : null}
       <button type="button" className={exploded ? 'twin-open on' : 'twin-open'} aria-pressed={exploded} onClick={() => onExplode(!exploded)}>
         <svg viewBox="0 0 22 14" width="22" height="14" aria-hidden="true">
           <path d="M1 4.5h4v5H1zM8 2.5h5.5v9H8zM16.5 4h4.5v6h-4.5z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
@@ -226,6 +277,7 @@ export function TurbinePanel({ turbine, turbineId, alarms, provider, exploded, o
           ))}
         </ul>
       ) : null}
+      {exploded ? null : <TurbineCommands commands={mine} />}
       <div className="twin-actions">
         <button type="button" onClick={() => onAsk(`Has ${turbineId} had gearbox problems before?`)}>
           Ask about its gearbox history
@@ -238,28 +290,69 @@ export function TurbinePanel({ turbine, turbineId, alarms, provider, exploded, o
             Simulate a gearbox fault (5 minutes)
           </button>
         ) : null}
+        {provider.limitTurbine ? (
+          <button type="button" className="warn" onClick={() => provider.limitTurbine?.(turbineId)}>
+            Simulate an approved limit to 30 % (5 minutes)
+          </button>
+        ) : null}
       </div>
     </aside>
   );
 }
 
-export function AlarmFeed({ alarms, onSelect }: { alarms: Alarm[]; onSelect: (id: string) => void }) {
+/**
+ * The panel at the lower left: the active alarms and, on a second tab, the commands of the last 24 hours
+ * as the edge logged them. `commands` is null when the route cannot read the command log.
+ */
+export function AlarmFeed({ alarms, commands, route, onSelect }: { alarms: Alarm[]; commands: CommandEntry[] | null; route: string; onSelect: (id: string) => void }) {
+  const [tab, setTab] = useState<'alarms' | 'commands'>('alarms');
+  const groups = groupCommands(commands ?? []);
+  const inForce = groups.filter((g) => g.first.command === 'curtail' && g.level === 1).length;
   return (
-    <section className="twin-panel twin-alarmfeed" aria-label="Active alarms">
-      <h2>
-        Active alarms <span className={alarms.length ? 'count on' : 'count'}>{alarms.length}</span>
-      </h2>
-      {alarms.length === 0 ? (
-        <p className="twin-note">None. The turbine controllers report no alarm.</p>
+    <section className="twin-panel twin-alarmfeed" aria-label="Active alarms and commands">
+      <div className="twin-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === 'alarms'} className={tab === 'alarms' ? 'on' : ''} onClick={() => setTab('alarms')}>
+          Active alarms <span className={alarms.length ? 'count on' : 'count'}>{alarms.length}</span>
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'commands'} className={tab === 'commands' ? 'on' : ''} onClick={() => setTab('commands')}>
+          Commands <span className={inForce ? 'count limit' : 'count'} title={inForce ? `${inForce} limit${inForce > 1 ? 's' : ''} in force` : undefined}>{commands === null ? '–' : groups.length}</span>
+        </button>
+      </div>
+      {tab === 'alarms' ? (
+        alarms.length === 0 ? (
+          <p className="twin-note">None. The turbine controllers report no alarm.</p>
+        ) : (
+          <ul className="twin-alarms">
+            {alarms.slice(0, 6).map((a) => (
+              <li key={a.id} className={a.severity}>
+                <button type="button" onClick={() => onSelect(a.turbineId)}>
+                  <b>{a.turbineId}</b> {a.description}
+                  <small>
+                    {a.code} · since {clock(a.raisedAt)}
+                    {a.value !== null ? ` · ${a.value.toFixed(1)} ${unitLabel(a.unit)}` : ''}
+                  </small>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : commands === null ? (
+        <p className="twin-note">
+          {route === 'lakehouse'
+            ? 'The command log is read on the Eventhouse route only. On the copy in the Lakehouse the twin shows a limit without who asked for it.'
+            : 'This KQL database has no command log yet. Phase 5c creates it: block 1 of fabric/kql/07-command-log.kql.'}
+        </p>
+      ) : groups.length === 0 ? (
+        <p className="twin-note">None in the last 24 hours. A limit, a stop or a reset shows here with who asked for it, once the edge has logged it.</p>
       ) : (
-        <ul className="twin-alarms">
-          {alarms.slice(0, 6).map((a) => (
-            <li key={a.id} className={a.severity}>
-              <button type="button" onClick={() => onSelect(a.turbineId)}>
-                <b>{a.turbineId}</b> {a.description}
+        <ul className="twin-commands">
+          {groups.slice(0, 6).map((g) => (
+            <li key={g.key} className={`level${g.level}`}>
+              <button type="button" onClick={() => (g.turbines.length === 1 && g.turbines[0].startsWith('WT-') ? onSelect(g.turbines[0]) : undefined)}>
+                <b>{groupTarget(g, SITE.turbines.length)}</b> {commandWords(g.first)} <em>{g.status}</em>
                 <small>
-                  {a.code} · since {clock(a.raisedAt)}
-                  {a.value !== null ? ` · ${a.value.toFixed(1)} ${unitLabel(a.unit)}` : ''}
+                  {clock(g.first.at)} · {askedBy(g.first)}
+                  {g.first.error ? ` · ${g.first.error}` : ''}
                 </small>
               </button>
             </li>

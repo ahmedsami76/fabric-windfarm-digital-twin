@@ -42,3 +42,10 @@ TurbineTelemetry
 | where Timestamp > ago(15m)
 | extend DelayS = datetime_diff('second', IngestedAt, Timestamp)
 | summarize Rows = count(), Median = percentile(DelayS, 50), P95 = percentile(DelayS, 95), Highest = max(DelayS)
+
+// 7. The command log of the edge with what the telemetry showed afterwards (Phase 5c). The app asks
+//    with the other live values and shows who limited a turbine, since when and until when.
+//    Needs block 1 of 07-command-log.kql; without it this query fails here and the app shows no commands.
+CommandLog(24h)
+| order by Timestamp desc, TurbineId asc
+| take 60

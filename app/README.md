@@ -2,7 +2,7 @@
 
 A Fabric app, built with Rayfin, that shows Northwind Ridge in 3D on live data and lets you ask the data agent questions. The deployment guide is [docs/11-deployment-guide-phase4.md](../docs/11-deployment-guide-phase4.md).
 
-To look at it right now, without Fabric and without installing anything, open `preview/windfarm-twin-preview.html` in a browser. It runs on simulated values. Select a turbine, then **Exploded view** to take it apart, and **Simulate a gearbox fault**.
+To look at it right now, without Fabric and without installing anything, open `preview/windfarm-twin-preview.html` in a browser. It runs on simulated values. Select a turbine, then **Exploded view** to take it apart, **Simulate a gearbox fault**, and **Simulate an approved limit** to see how the twin shows a command (Phase 5c).
 
 ![The twin: the whole site](../docs/images/phase4-twin-site.jpg)
 
@@ -44,6 +44,7 @@ browser: React + Three.js              Fabric app: functions (TypeScript)       
 - A function never throws: it returns its result or `{ "error": … }` with the reason, which the page shows.
 - The functions find the workspace, the KQL database, the Lakehouse and the data agent by name (`functions/src/config.ts`). No identifier is configured.
 - `?sample` at the end of the app's address shows the simulation instead: useful when the edge VM is off.
+- The twin shows commands and sends none. The command log (`CommandLog(24h)` of the KQL database, Phase 5c) is a fourth query of the Eventhouse route, read at most once in 15 seconds. On a database without it, and on the Lakehouse route, the twin works as before and shows no commands.
 - `?fullquality` keeps the full picture. Without it the twin lowers its picture quality by itself when frames take longer than 55 ms, which happens on a computer without a graphics card and over a remote desktop.
 
 ## What the picture means
@@ -58,6 +59,9 @@ browser: React + Three.js              Fabric app: functions (TypeScript)       
 | Nacelle amber | A gearbox reading past 4.0 mm/s of vibration or 72 °C of oil temperature: the early warning the operations agent of Phase 3 watches. Also a single reading above the controller's own limits (5.5 mm/s, 78 °C) for which the controller has raised no alarm: it compares a short average with its limit and, for vibration, waits 15 seconds |
 | Nacelle red | The turbine controller has a warning or critical alarm on the gearbox, and the alarm list shows it. Red never comes from a reading alone, so the picture cannot contradict the alarm list |
 | White strokes in the air | The wind at the met mast: direction, and longer and faster with more wind |
+| A blue card under a turbine's power | Something holds the turbine below its rated power. With the command log of Phase 5c the card says who asked for the limit, since when, until when, and whether the telemetry confirmed it. Amber: the turbine controller holds it down by itself, on an alarm. Grey: a limit is set and nothing says who asked |
+| **Limited by command** in the top bar | How many turbines a command holds below rated power, from the same log. Not shown when the log cannot be read |
+| The tab **Commands** beside the alarms | The commands of the last 24 hours as the edge logged them: limits, stops, resets, with who asked and what became of each. A command to all twelve turbines is one line |
 
 Two things are not to scale, on purpose: heights of the ground are drawn 2.5 times taller, and turbines 1.8 times larger. Positions are true.
 

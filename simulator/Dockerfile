@@ -1,5 +1,5 @@
 # Build from the repository root so that the site definition is in the context:
-#   docker build -f simulator/Dockerfile -t windfarm-simulator:1.1.0 .
+#   docker build -f simulator/Dockerfile -t windfarm-simulator:1.2.0 .
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \

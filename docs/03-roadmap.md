@@ -1,6 +1,6 @@
 # Roadmap
 
-Phases 1 to 4 are in this repository and have been deployed. Phase 5 is delivered in three steps: 5a has run, 5b is built and has not run, 5c is planned. Its section below says what was planned, what was built differently and why, and what is still to be proven; the sections on Phases 2 to 4 say what each delivered and what it left open. Product facts were checked against the Microsoft Fabric documentation in November 2026; several of these features are in preview and may change.
+Phases 1 to 4 are in this repository and have been deployed. Phase 5 is delivered in three steps: 5a and 5b have run and were reported as working, 5c is built and has not run. Its section below says what was planned, what was built differently and why, and what is still to be proven; the sections on Phases 2 to 4 say what each delivered and what it left open. Product facts were checked against the Microsoft Fabric documentation in November 2026; several of these features are in preview and may change.
 
 | Phase | Delivers | State |
 |---|---|---|
@@ -8,7 +8,7 @@ Phases 1 to 4 are in this repository and have been deployed. Phase 5 is delivere
 | 2. Prepare and model | Enriched tables and KQL views, semantic model | Delivered; deployed on 20 November 2026 |
 | 3. Ontology and agents | Data agent with a test, ontology, operations agent that detects the fault | Delivered; deployed on 21 November 2026 |
 | 4. Rayfin app | 3D digital twin with live data, an exploded view of each turbine and chat | Delivered; deployed on 23 November 2026. Both routes for the live values worked |
-| 5. Remediation with approval | Operations agent proposes a fix, an engineer approves, the edge applies it | In three steps. 5a, the command path from Fabric to the edge, was built on 23 November 2026 and reported as working on 24 November ([12-deployment-guide-phase5a.md](12-deployment-guide-phase5a.md)). 5b, the approval, was built on 24 November and has not run yet ([13-deployment-guide-phase5b.md](13-deployment-guide-phase5b.md)). 5c, the confirmation and the record, is planned |
+| 5. Remediation with approval | Operations agent proposes a fix, an engineer approves, the edge applies it | In three steps. 5a, the command path from Fabric to the edge, was built on 23 November 2026 and reported as working on 24 November ([12-deployment-guide-phase5a.md](12-deployment-guide-phase5a.md)). 5b, the approval, was built and first run on 24 November and reported as working that evening: the message arrived, it was approved, WT-03 was curtailed ([13-deployment-guide-phase5b.md](13-deployment-guide-phase5b.md)). 5c, the record of the command and the command in the twin, was built on 25 November and has not run ([14-deployment-guide-phase5c.md](14-deployment-guide-phase5c.md)); it delivers less than the plan below said, and says what |
 
 ## Phase 2: Prepare and model
 
@@ -116,9 +116,21 @@ Phases 1 to 4 are in this repository and have been deployed. Phase 5 is delivere
 
 **To be proven by the first run of 5b.** The update policy on the tenant; that a job's values reach the notebook and that it installs its libraries in a job; that Fabric accepts the changed definition; that the playbook has the one rule and carries the action; that the agent passes the turbine of the row and leads with the cost; and how long each part takes. [phase5-validation-log.md](phase5-validation-log.md) has the findings so far.
 
-**The command center (24 November 2026).** Asked for by the user after 5b: a way to keep sending commands by hand once notebook 12 belongs to the agent. Notebook `13_command_center` does it, and also waits for each command in the telemetry and says how long it took, which is the first piece of 5c's confirmation. Not built: the same controls in the 3D twin. They are possible, and two things have to be settled first: everyone the app is shared with would send commands with the owner's rights, and whether a function of the app may start a notebook job with its Fabric token is not known.
+**The command center (24 November 2026).** Asked for by the user after 5b: a way to keep sending commands by hand once notebook 12 belongs to the agent. Notebook `13_command_center` does it, and also waits for each command in the telemetry and says how long it took, which was the first piece of 5c's confirmation. Not built: the same controls in the 3D twin. They are possible, and two things have to be settled first: everyone the app is shared with would send commands with the owner's rights, and whether a function of the app may start a notebook job with its Fabric token is not known.
 
-**5c, as it looks from here.** The agent or a query confirms from telemetry that the setpoint took effect; a row in a table records the proposal, the approval and the effect, with who approved; the twin shows a requested, a confirmed and an ended curtailment; and something watches a case that is still open when the hour ends, which the rule of 5b does not.
+**The first run of 5b (24 November 2026).** Steps 3 to 5 were seen: the notebook runs as a job and takes two to three minutes to start; Fabric refuses the script's change to the agent, so the action was added by hand, where the portal turned out to make every name of the notebook's parameter cell a parameter; the playbook came out with one rule. Step 6 was reported: the message arrived, it was approved, WT-03 was curtailed. Not seen: the message, the approval, the turbine, any time on a clock. Open from that run: why the script is refused, and whether the Python kernel shortens the start.
+
+**5c as built (25 November 2026).** The plan was: the agent confirms from telemetry, a work order row records the event, the twin shows the curtailment and who approved it. Built:
+
+- **The record is kept by the edge.** The simulator, version 1.2.0, reports every operating command it is given as one more kind of message, `command`, on the telemetry's path. So the record also has commands Fabric never sent, and it says `taken` or `refused` in the edge's own words. The table `EdgeCommands` holds it.
+- **The confirmation is a function, not a message of the agent.** `CommandLog()` puts each command next to the telemetry after it: confirmed, in force, ended, with the seconds from Fabric to the edge and from the edge back as a reading.
+- **The command center reads it** after each send, and prints the log with `history()`.
+- **The twin shows it**: who limited a turbine, since when, until when, confirmed or not; the commands of the day in a tab beside the alarms. It sends nothing, which the user chose on 24 November.
+- **A second check for the KQL**, against the tables' columns and types, because this function joins tables and grammar alone could not check it.
+
+**What 5c does not deliver, of what was planned.** The agent sends no second message and does not return to a case that is still open when the limit ends. Who approved is not recorded: Fabric does not hand that name to the notebook, so the record has the text the agent passes. There is no work order for the event. And a command that never reaches the edge has no line anywhere. [The guide lists these](14-deployment-guide-phase5c.md#what-this-phase-leaves-open) with what each would take.
+
+**To be proven by the first run of 5c.** That Azure IoT Operations takes the data flow of Phase 1 a second time, with a seventh topic; that the KQL runs and `CommandLog` says what its tested Python copy says; that the command center reads the KQL database from a notebook; and that the twin's service principal may run the function.
 
 ## Further options
 

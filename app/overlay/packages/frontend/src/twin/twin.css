@@ -9,6 +9,7 @@
   --good: #3ddc97;
   --warn: #ffb224;
   --bad: #ff4d5e;
+  --limit: #5aa9ff; /* the colour of the state CURTAILED in the scene */
   position: fixed;
   inset: 0;
   overflow: hidden;
@@ -275,6 +276,9 @@
   font-size: 22px;
   font-weight: 600;
   line-height: 1.1;
+}
+.twin-kpi > b.limit {
+  color: var(--limit);
 }
 .twin-kpi > b.bad {
   color: var(--bad);
@@ -659,11 +663,33 @@
   padding: 12px 12px 10px;
   overflow-y: auto;
 }
-.twin-alarmfeed h2 {
+/* Two tabs in that panel: the alarms and the commands. */
+.twin-tabs {
   display: flex;
+  gap: 4px;
+  margin: -2px 0 6px;
+}
+.twin-tabs button {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: 7px;
+  padding: 3px 8px 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.twin-tabs button:hover {
+  color: var(--ink);
+}
+.twin-tabs button.on {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
 }
 .twin-alarmfeed .count {
   padding: 0 7px;
@@ -674,6 +700,10 @@
 }
 .twin-alarmfeed .count.on {
   background: var(--bad);
+}
+.twin-alarmfeed .count.limit {
+  background: var(--limit);
+  color: #06121f;
 }
 .twin-alarms li {
   margin-top: 4px;
@@ -700,6 +730,95 @@
 .twin-alarms small {
   display: block;
   font-size: 11px;
+  color: var(--muted);
+}
+
+/* Commands: the edge's log, in the tab beside the alarms and in the panel of a turbine. */
+.twin-commands li {
+  margin-top: 4px;
+  border-left: 3px solid rgba(255, 255, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.twin-commands li.level1 {
+  border-left-color: var(--limit);
+  background: rgba(90, 169, 255, 0.13);
+}
+.twin-commands li.level2 {
+  border-left-color: var(--bad);
+  background: rgba(255, 77, 94, 0.13);
+}
+.twin-commands li button,
+.twin-commands.inline li {
+  display: block;
+  width: 100%;
+  padding: 6px 9px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.twin-commands em {
+  float: right;
+  margin-left: 8px;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+}
+.twin-commands li.level1 em {
+  color: var(--limit);
+}
+.twin-commands li.level2 em {
+  color: var(--bad);
+}
+.twin-commands small {
+  display: block;
+  clear: both;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* What holds a turbine below its rated power, in the panel of that turbine. */
+.twin-limit {
+  display: flex;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 9px 11px 9px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(90, 169, 255, 0.45);
+  background: linear-gradient(180deg, rgba(90, 169, 255, 0.2), rgba(90, 169, 255, 0.1));
+}
+.twin-limit svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--limit);
+}
+.twin-limit b {
+  display: block;
+  font-size: 13px;
+}
+.twin-limit span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: #cfdbe6;
+}
+.twin-limit.pending {
+  border-style: dashed;
+}
+.twin-limit.controller {
+  border-color: rgba(255, 178, 36, 0.5);
+  background: linear-gradient(180deg, rgba(255, 178, 36, 0.18), rgba(255, 178, 36, 0.08));
+}
+.twin-limit.controller svg {
+  color: var(--warn);
+}
+.twin-limit.unexplained,
+.twin-limit.unknown {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.06);
+}
+.twin-limit.unexplained svg,
+.twin-limit.unknown svg {
   color: var(--muted);
 }
 

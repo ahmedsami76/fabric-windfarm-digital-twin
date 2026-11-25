@@ -28,6 +28,19 @@ export const LOOKUP_TTL_MS = 10 * 60 * 1000;
 /** Telemetry older than this is not "live". */
 export const LIVE_WINDOW = '10m';
 
+/** How far back the command log is read. A limit that was set longer ago is shown without who asked for it. */
+export const COMMANDS_WINDOW = '24h';
+
+/**
+ * The command log is read once in this time, however many pages are open and ask every five seconds:
+ * its query joins every command of the day with the telemetry after it. A new command therefore shows
+ * in the twin up to this much later than the turbine's own values do.
+ */
+export const COMMANDS_CACHE_MS = 15_000;
+
+/** After the KQL database refused the query for the command log, it is not asked again for this long. */
+export const COMMAND_LOG_RETRY_MS = 5 * 60 * 1000;
+
 /**
  * The Lakehouse copies are written at most every 5 minutes (`TargetLatencyInMinutes=5` in
  * `fabric/kql/03-onelake-availability.kql`) and the SQL endpoint finds new files a little later, so the

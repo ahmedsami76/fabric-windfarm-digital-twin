@@ -13,6 +13,11 @@ export interface TwinDataProvider {
   diagnostics(): Promise<DiagnosticStep[]>;
   /** Only the simulation has it: start a gearbox fault on a turbine, as the edge script does. */
   injectFault?(turbineId: string): void;
+  /**
+   * Only the simulation has it: limit a turbine's power for a few minutes, as the operations agent does
+   * after an approval. The deployed twin shows commands and sends none.
+   */
+  limitTurbine?(turbineId: string): void;
   /** Only the Fabric provider has it: the route of the last answer, and what the Eventhouse route said. */
   routeStatus?(): { route: 'eventhouse' | 'lakehouse' | null; eventhouseSaid: string | null };
 }

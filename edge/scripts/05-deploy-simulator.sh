@@ -8,7 +8,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../../config/load-env.sh"
 require_edge_vm
 need kubectl docker
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
-SIM_IMAGE="${SIM_IMAGE:-windfarm-simulator:1.1.0}"
+SIM_IMAGE="${SIM_IMAGE:-windfarm-simulator:1.2.0}"
 SIM_NAMESPACE="${SIM_NAMESPACE:-windfarm}"
 AIO_NAMESPACE="azure-iot-operations"
 CA_CONFIGMAP="azure-iot-operations-aio-ca-trust-bundle"

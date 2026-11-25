@@ -59,6 +59,11 @@ def phase3_document() -> dict:
     }
 
 
+def the_action(document) -> dict:
+    """The action 'Curtail turbine' of a definition, whatever its key."""
+    return tool.find_action(document)[1]
+
+
 def b64(document) -> str:
     return base64.b64encode(json.dumps(document).encode()).decode()
 
@@ -255,9 +260,11 @@ def test_apply_saves_first_then_writes_the_instructions_and_the_action(fabric, c
     now = fabric.document
     configuration = now["configuration"]
     assert configuration["instructions"] == spec.setup_text()
-    action = configuration["actions"][spec.ACTION_ALIAS]
+    action_key, action = tool.find_action(now)
+    assert action_key == action["id"]                                     # as the portal does: the action's id is its key
     assert action["kind"] == "FabricJobAction" and action["displayName"] == "Curtail turbine"
-    assert action["connection"] == {"jobArtifactId": NOTEBOOK, "jobWorkspaceId": WS, "itemType": "Notebook", "jobType": "RunNotebook"}
+    # "SynapseNotebook" is what the portal writes for a notebook (read back on 24 November 2026), not "Notebook".
+    assert action["connection"] == {"jobArtifactId": NOTEBOOK, "jobWorkspaceId": WS, "itemType": "SynapseNotebook", "jobType": "RunNotebook"}
     assert [p["name"] for p in action["parameters"]] == ["turbine", "percent", "duration", "requested_by"]
     assert all(set(p) == {"name", "description"} and p["description"] for p in action["parameters"])
     assert len(action["id"]) == 36 and action["description"] == spec.action_description()
@@ -270,7 +277,7 @@ def test_apply_saves_first_then_writes_the_instructions_and_the_action(fabric, c
     assert "Instructions and action are those of Phase 5b." in text and "Differs from Phase 5b" not in text
     assert "The agent was running and is now stopped." in text and "generate the playbook" in text
     assert "bash infra/09-remediation-agent.sh --restore " in text
-    assert "Action curtailTurbine: 'Curtail turbine' (FabricJobAction), runs Notebook 12_send_edge_command as RunNotebook. Parameters: turbine, percent, duration, requested_by" in text
+    assert f"Action {action_key}: 'Curtail turbine' (FabricJobAction), runs SynapseNotebook 12_send_edge_command as RunNotebook. Parameters: turbine, percent, duration, requested_by" in text
 
 
 def test_apply_twice_changes_nothing_more_and_other_actions_stay(fabric, capsys):
@@ -280,10 +287,11 @@ def test_apply_twice_changes_nothing_more_and_other_actions_stay(fabric, capsys)
     first = json.loads(json.dumps(fabric.document))
     assert run_tool(fabric, "apply", capsys=capsys)[0] == 0
     assert fabric.document == first                                   # the action kept its id
-    assert set(fabric.document["configuration"]["actions"]) == {"notifyFlow", spec.ACTION_ALIAS}
+    made_key = tool.find_action(fabric.document)[0]
+    assert set(fabric.document["configuration"]["actions"]) == {"notifyFlow", made_key}
     # An action made by hand under another key, with the same name, is updated in place and not doubled.
     actions = fabric.document["configuration"]["actions"]
-    actions["a1"] = dict(actions.pop(spec.ACTION_ALIAS), parameters=[{"name": "Turbine", "description": "typed by hand"}])
+    actions["a1"] = dict(actions.pop(made_key), parameters=[{"name": "Turbine", "description": "typed by hand"}])
     code, text = run_tool(fabric, "show", capsys=capsys)
     assert "The action's parameters are Turbine; they should be turbine, percent, duration, requested_by." in text
     assert run_tool(fabric, "apply", capsys=capsys)[0] == 0
@@ -449,7 +457,7 @@ esac
     assert code == 0 and "The instructions are those of Phase 3" in text, text
     code, text = script()
     assert code == 0 and "Instructions and action are those of Phase 5b." in text, text
-    assert fabric.document["configuration"]["actions"][spec.ACTION_ALIAS]["connection"]["jobArtifactId"] == NOTEBOOK
+    assert the_action(fabric.document)["connection"]["jobArtifactId"] == NOTEBOOK
     code, text = script("--rehearse", "WT-07")
     assert code == 0 and "The job completed" in text, text
     saved = next(fabric.saved.glob("*.json"))
@@ -499,7 +507,7 @@ def test_the_definition_follows_the_published_schema():
     """The shape of Microsoft's article 'Operations agent definition' (read on 24 November 2026)."""
     made = tool.with_remediation(phase3_document(), NOTEBOOK, WS, new_id=lambda: "55555555-5555-4555-8555-555555555555")
     assert set(made) == {"configuration", "playbook", "shouldRun"}
-    action = made["configuration"]["actions"][spec.ACTION_ALIAS]
+    action = made["configuration"]["actions"]["55555555-5555-4555-8555-555555555555"]
     assert set(action) == {"id", "kind", "displayName", "description", "connection", "parameters"}
     assert set(action["connection"]) == {"jobArtifactId", "jobWorkspaceId", "itemType", "jobType"}
     # The instructions travel as one JSON string: the page's own example breaks a string over two lines,
@@ -515,6 +523,28 @@ def test_the_definition_follows_the_published_schema():
     by_hand["configuration"]["instructions"] = by_hand["configuration"]["instructions"].replace("crosses above 4 mm/s", "is above 4 mm/s")
     assert tool.differences(by_hand, NOTEBOOK, WS, DATABASE) == [
         "The instructions speak of the table and the action of Phase 5b and are not word for word those of fabric/operations-agent/phase5b-agent-setup.txt."]
+
+
+def test_the_agent_as_the_portal_made_it_counts_as_phase_5b():
+    """What --show printed for the user's agent after the way by hand, 24 November 2026, 22:38: the action under
+    its id as key, item type SynapseNotebook, no message destination, the data source under its id, no playbook yet."""
+    by_hand = {"configuration": {
+        "instructions": spec.setup_text(),
+        "dataSources": {DATABASE: {"id": DATABASE, "type": "KustoDatabase", "workspaceId": WS}},
+        "actions": {"29c47124-3741-4b55-b807-c43d142a3eb1": {
+            "id": "29c47124-3741-4b55-b807-c43d142a3eb1", "kind": "FabricJobAction", "displayName": "Curtail turbine", "description": "typed in the dialog",
+            "connection": {"jobArtifactId": NOTEBOOK, "jobWorkspaceId": WS, "itemType": "SynapseNotebook", "jobType": "RunNotebook"},
+            "parameters": [{"name": name, "type": "string", "description": "pasted"} for name, _ in spec.PARAMETERS]}}},
+        "playbook": {}, "shouldRun": False}
+    assert tool.differences(by_hand, NOTEBOOK, WS, DATABASE) == []
+    lines = tool.describe(by_hand, "Configurations.json", {NOTEBOOK: "12_send_edge_command", DATABASE: "WindFarmEH"})
+    assert "Definition part: Configurations.json" in lines and "Running: no" in lines and "Playbook in the definition: empty" in lines
+    assert ("Action 29c47124-3741-4b55-b807-c43d142a3eb1: 'Curtail turbine' (FabricJobAction), runs SynapseNotebook 12_send_edge_command "
+            "as RunNotebook. Parameters: turbine, percent, duration, requested_by") in lines
+    # Running the script on it afterwards keeps the action's key and id, and whatever else the portal wrote into a parameter.
+    again = tool.with_remediation(by_hand, NOTEBOOK, WS)
+    assert list(again["configuration"]["actions"]) == ["29c47124-3741-4b55-b807-c43d142a3eb1"]
+    assert again["configuration"]["actions"]["29c47124-3741-4b55-b807-c43d142a3eb1"]["id"] == "29c47124-3741-4b55-b807-c43d142a3eb1"
 
 
 def test_the_action_cannot_stop_a_turbine():

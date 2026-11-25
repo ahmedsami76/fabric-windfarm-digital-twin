@@ -5,7 +5,7 @@ import { fromFunction } from '../overlay/packages/frontend/src/twin/data/functio
 import { LAKEHOUSE_POLL_MS, POLL_MS, STALE_AFTER_S, STOPPED_HINT, ageText, freshnessOf, pollDelay } from '../overlay/packages/frontend/src/twin/data/provider';
 import { RETRY_EVENTHOUSE_MS, type RouteCalls, chooseRoute } from '../overlay/packages/frontend/src/twin/data/routes';
 
-const state = (route: 'eventhouse' | 'lakehouse'): LiveState => ({ source: 'fabric', route, asOf: '2026-11-23T07:00:00Z', turbines: [], alarms: [], weather: null });
+const state = (route: 'eventhouse' | 'lakehouse'): LiveState => ({ source: 'fabric', route, asOf: '2026-11-23T07:00:00Z', turbines: [], alarms: [], weather: null, commands: null });
 const point: TrendPoint = { t: '2026-11-23T07:00:00Z', activePower: 1, windSpeed: 1, rotorSpeed: 1, gearboxOilTemp: 1, gearboxBearingTemp: 1, gearboxVibration: 1 };
 
 /** Two pretend routes. `eventhouse.fail` makes the Eventhouse functions answer with that reason. */

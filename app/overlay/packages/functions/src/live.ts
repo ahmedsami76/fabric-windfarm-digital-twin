@@ -11,8 +11,8 @@
  * `fabric/kql/94-twin-app-queries.kql` and `fabric/sql/94-twin-app-queries.sql`.
  */
 import { FUNCTIONS_BUILD } from './build.js';
-import { LAKEHOUSE_WINDOW_MINUTES, LIVE_WINDOW } from './config.js';
-import type { Alarm, DiagnosticStep, LiveState, TrendPoint, TurbineLive, TurbineState, Weather } from './contract.js';
+import { COMMANDS_CACHE_MS, COMMANDS_WINDOW, COMMAND_LOG_RETRY_MS, LAKEHOUSE_WINDOW_MINUTES, LIVE_WINDOW } from './config.js';
+import type { Alarm, CommandEntry, DiagnosticStep, LiveState, TrendPoint, TurbineLive, TurbineState, Weather } from './contract.js';
 import { type Access, type LakehouseLookup, type Lookup, brief, clearLookup, lookup, lookupLakehouse } from './fabric.js';
 import { KustoError, runQuery } from './kusto.js';
 import { NoPrincipal, type Principal, clearPrincipalToken, principalToken } from './principal.js';
@@ -54,6 +54,15 @@ export const ALARMS_QUERY = `ActiveAlarms()
 export const WEATHER_QUERY = `WeatherObservations
 | where Timestamp > ago(${LIVE_WINDOW})
 | summarize arg_max(Timestamp, WindSpeed, WindDirection, WindGust, AmbientTemp, AirDensity)`;
+
+/**
+ * The edge's command log with what the telemetry showed afterwards (Phase 5c). `CommandLog` is a
+ * function of the KQL database: `fabric/kql/07-command-log.kql` creates it together with the table
+ * `EdgeCommands`. A database without them refuses this query; the twin then shows no commands.
+ */
+export const COMMANDS_QUERY = `CommandLog(${COMMANDS_WINDOW})
+| order by Timestamp desc, TurbineId asc
+| take 60`;
 
 const TURBINE_ID = /^WT-\d{2}$/;
 
@@ -185,6 +194,24 @@ export function toAlarm(row: Record<string, unknown>): Alarm {
   };
 }
 
+export function toCommand(row: Record<string, unknown>): CommandEntry {
+  return {
+    requestId: text(row.RequestId),
+    turbineId: text(row.TurbineId),
+    command: text(row.Command).toLowerCase(),
+    status: text(row.Status),
+    at: text(row.Timestamp),
+    requestedBy: text(row.RequestedBy),
+    origin: text(row.Source).toLowerCase() === 'edge' ? 'edge' : 'cloud',
+    limitKw: numOrNull(row.LimitKw),
+    percent: numOrNull(row.Percent),
+    endsAt: text(row.EndsAt),
+    confirmedAt: text(row.ConfirmedAt),
+    endedAt: text(row.EndedAt),
+    error: text(row.Error),
+  };
+}
+
 export function toWeather(row: Record<string, unknown> | undefined): Weather | null {
   if (!row || !text(row.Timestamp)) return null; // no observation in the window: one row of nulls
   return {
@@ -218,10 +245,28 @@ let acceptedDatabase: string | undefined;
 /** The same for the SQL endpoint of the Lakehouse: the name of the database it answered to. */
 let acceptedSqlDatabase: string | undefined;
 
-/** Forget both. Used by the connection check and by the tests. */
+/**
+ * The command log is an addition of Phase 5c, and the twin has to work on a database that does not have
+ * it. When the database refuses the query, it is not asked again for a while, and what it said is kept
+ * for the connection check.
+ */
+let commandLogAskAgainAt = 0;
+let commandLogSaid: string | null = null;
+/** The last answer, kept for COMMANDS_CACHE_MS while the host lives. */
+let commandLogKept: { at: number; lines: CommandEntry[] } | null = null;
+
+/** Forget all of it. Used by the connection check and by the tests. */
 export function resetRoute(): void {
   acceptedDatabase = undefined;
   acceptedSqlDatabase = undefined;
+  commandLogAskAgainAt = 0;
+  commandLogSaid = null;
+  commandLogKept = null;
+}
+
+/** What the KQL database last said to the query for the command log; null when it answered. */
+export function commandLogProblem(): string | null {
+  return commandLogSaid;
 }
 
 export function currentSqlDatabase(): string | undefined {
@@ -254,10 +299,32 @@ export async function queryEventhouse(access: Access, found: Lookup, token: stri
   throw failure ?? new Error('The Eventhouse was not asked.');
 }
 
-function liveState(route: 'eventhouse' | 'lakehouse', turbineRows: Row[], alarmRows: Row[], weatherRows: Row[]): LiveState {
+function liveState(route: 'eventhouse' | 'lakehouse', turbineRows: Row[], alarmRows: Row[], weatherRows: Row[], commands: CommandEntry[] | null): LiveState {
   const turbines = turbineRows.map(toTurbine);
   const asOf = turbines.reduce((latest, t) => (t.timestamp > latest ? t.timestamp : latest), '');
-  return { source: 'fabric', route, asOf, turbines, alarms: alarmRows.map(toAlarm), weather: toWeather(weatherRows[0]) };
+  return { source: 'fabric', route, asOf, turbines, alarms: alarmRows.map(toAlarm), weather: toWeather(weatherRows[0]), commands };
+}
+
+/**
+ * The command log, or null when the database cannot give it. It never throws: the turbines are shown
+ * with or without it. Call it after a query has settled the name of the database.
+ */
+export async function commandsFromEventhouse(access: Access, found: Lookup, token: string, now: number = Date.now()): Promise<CommandEntry[] | null> {
+  if (commandLogKept && now >= commandLogKept.at && now - commandLogKept.at < COMMANDS_CACHE_MS) return commandLogKept.lines;
+  if (now < commandLogAskAgainAt) return null;
+  try {
+    const database = acceptedDatabase ?? found.kqlDatabaseName;
+    const rows = await runQuery({ queryServiceUri: found.queryServiceUri, database, query: COMMANDS_QUERY, token, fetch: access.fetch });
+    commandLogSaid = null;
+    commandLogKept = { at: now, lines: rows.map(toCommand) };
+    return commandLogKept.lines;
+  } catch (error) {
+    commandLogKept = null;
+    commandLogSaid = brief(error);
+    // A query the database cannot run will not run five seconds later either. Anything else may pass.
+    if (error instanceof KustoError && error.status >= 400 && error.status < 500) commandLogAskAgainAt = now + COMMAND_LOG_RETRY_MS;
+    return null;
+  }
 }
 
 /** The live values from the KQL database, as the service principal. Throws NoPrincipal when there is none. */
@@ -266,11 +333,12 @@ export async function liveFromEventhouse(access: Access, principal: () => Princi
   const [found, token] = await Promise.all([lookup(access), principalToken(who, access.fetch)]);
   // The first query settles the name of the database; the other two then run side by side.
   const turbineRows = await queryEventhouse(access, found, token, TURBINES_QUERY);
-  const [alarmRows, weatherRows] = await Promise.all([
+  const [alarmRows, weatherRows, commands] = await Promise.all([
     queryEventhouse(access, found, token, ALARMS_QUERY),
     queryEventhouse(access, found, token, WEATHER_QUERY),
+    commandsFromEventhouse(access, found, token),
   ]);
-  return liveState('eventhouse', turbineRows, alarmRows, weatherRows);
+  return liveState('eventhouse', turbineRows, alarmRows, weatherRows, commands);
 }
 
 export async function trendFromEventhouse(access: Access, principal: () => Principal, turbineId: string, minutes: number): Promise<TrendPoint[]> {
@@ -326,7 +394,8 @@ export async function queryLakehouse(found: LakehouseLookup, token: string, conn
 export async function liveFromLakehouse(access: Access, sqlToken: () => string, connect: SqlConnect): Promise<LiveState> {
   const found = await lookupLakehouse(access);
   const [turbineRows, alarmRows, weatherRows] = await queryLakehouse(found, sqlToken(), connect, [SQL_TURBINES, SQL_ALARMS, SQL_WEATHER]);
-  return liveState('lakehouse', turbineRows ?? [], alarmRows ?? [], weatherRows ?? []);
+  // The command log is not copied to the Lakehouse: on this route the twin shows a limit without who asked for it.
+  return liveState('lakehouse', turbineRows ?? [], alarmRows ?? [], weatherRows ?? [], null);
 }
 
 export async function trendFromLakehouse(access: Access, sqlToken: () => string, connect: SqlConnect, turbineId: string, minutes: number): Promise<TrendPoint[]> {
@@ -433,6 +502,18 @@ export async function checkEventhouse(access: Access, principal: () => Principal
         } catch (error) {
           steps.push({ step: 'Eventhouse route: delay from turbine to database', ok: false, skipped: true, detail: `not measured: ${brief(error)}` });
         }
+      }
+      // An addition of Phase 5c, not a condition of the route: without it the twin shows no commands.
+      // `resetRoute` above has cleared what was kept, so this asks the database itself.
+      const commands = await commandsFromEventhouse(access, found, token, now);
+      if (commands) {
+        const limits = commands.filter((c) => c.command === 'curtail' && c.status === 'in force').length;
+        step(steps, 'Eventhouse route: command log', true, `${commands.length} line${commands.length === 1 ? '' : 's'} in the last ${COMMANDS_WINDOW}, ${limits} limit${limits === 1 ? '' : 's'} in force`);
+      } else {
+        steps.push({
+          step: 'Eventhouse route: command log', ok: false, skipped: true,
+          detail: brief(`not there, so the twin shows no commands. Phase 5c creates it: block 1 of fabric/kql/07-command-log.kql. The database said: ${commandLogSaid ?? 'nothing'}`),
+        });
       }
     } catch (error) {
       step(steps, 'Eventhouse route: query', false, brief(error));

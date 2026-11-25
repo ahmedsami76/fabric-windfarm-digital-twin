@@ -69,6 +69,41 @@ export interface Weather {
   airDensity: number;
 }
 
+/**
+ * One line of the edge's command log with what the telemetry showed afterwards: a row of the function
+ * `CommandLog` of the KQL database (`fabric/kql/07-command-log.kql`, Phase 5c). A command to all
+ * turbines has one line for each of them, under one `requestId`.
+ */
+export interface CommandEntry {
+  requestId: string;
+  /** The turbine the command acted on. `EDGE-01` for a refused command that named no turbine. */
+  turbineId: string;
+  /** `curtail`, `release`, `stop`, `start` or `reset`. */
+  command: string;
+  /**
+   * What became of it, in the words of the KQL function: `refused`, `taken by the edge, not yet seen in
+   * telemetry`, `taken by the edge, never seen in telemetry`, `in force`, `ended` or `confirmed`.
+   */
+  status: string;
+  /** When the edge handled the command, ISO 8601, UTC. */
+  at: string;
+  /** Who asked for it, as the sender wrote it. Empty when the command did not say. */
+  requestedBy: string;
+  /** `cloud`: the command came from Fabric. `edge`: it was given at the edge. */
+  origin: 'cloud' | 'edge';
+  /** A curtailment: what the turbine may still produce, in kW and as a share of rated power. */
+  limitKw: number | null;
+  percent: number | null;
+  /** When a curtailment or a stop ends by itself. Empty: until it is released. */
+  endsAt: string;
+  /** When the telemetry first showed the command. Empty while it has not. */
+  confirmedAt: string;
+  /** When a curtailment ended: by its time, by a release, or by a later limit. Empty while it holds. */
+  endedAt: string;
+  /** Why the edge refused the command. */
+  error: string;
+}
+
 export interface LiveState {
   /** Where the values come from: Fabric, or the simulation built into the app. */
   source: 'fabric' | 'sample';
@@ -82,6 +117,11 @@ export interface LiveState {
   turbines: TurbineLive[];
   alarms: Alarm[];
   weather: Weather | null;
+  /**
+   * The commands of the last 24 hours, newest first. `null` when this route cannot tell: the Lakehouse
+   * route does not read the command log, and a KQL database from before Phase 5c has none.
+   */
+  commands: CommandEntry[] | null;
 }
 
 /** One minute of one turbine: averages. */

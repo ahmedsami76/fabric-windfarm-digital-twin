@@ -48,7 +48,9 @@ sys.path.insert(0, str(ROOT / "tools"))
 import remediation_spec as spec  # noqa: E402
 
 DEFAULT_API = "https://api.fabric.microsoft.com/v1"
-ITEM_TYPE, JOB_TYPE = "Notebook", "RunNotebook"
+# As the portal writes them for an action that runs a notebook (read back on 24 November 2026). Microsoft's
+# article gives "Notebook" as its example of an item type; the update that carried that word was refused.
+ITEM_TYPE, JOB_TYPE = "SynapseNotebook", "RunNotebook"
 REHEARSAL_DURATION = "2m"
 JOB_DONE = {"Completed", "Failed", "Cancelled", "Deduped"}
 
@@ -230,7 +232,8 @@ def with_remediation(document: dict, notebook_id: str, workspace_id: str, new_id
     actions = configuration.get("actions")
     if not isinstance(actions, dict):
         actions = configuration["actions"] = {}
-    actions[key or spec.ACTION_ALIAS] = action_object(notebook_id, workspace_id, (existing or {}).get("id") or new_id())
+    action_id = (existing or {}).get("id") or new_id()
+    actions[key or action_id] = action_object(notebook_id, workspace_id, action_id)     # the portal keys an action by its id
     out["playbook"] = {}
     out["shouldRun"] = False
     return out

@@ -56,6 +56,25 @@ await page.waitForFunction(() => document.querySelectorAll('.twin-part').length 
 await shot('5-fault', 9000);
 await page.click('.twin-button', { noWaitAfter: true }); // whole site
 await shot('6-site-with-fault', 9000);
+// A limit on WT-03, as the operations agent sets one after an approval: the panel of the turbine says who asked.
+await page.click('.twin-fleet li:nth-child(3) button', { noWaitAfter: true });
+await page.evaluate(() => {
+  window.__preview.advance(window.__preview.secondsToWind(11.2)); // a wind in which the limit holds the power down
+  window.__preview.provider.limitTurbine('WT-03');
+  window.__preview.advance(40); // the telemetry shows the limit and the power has come down
+});
+await page.waitForSelector('.twin-limit.command', { timeout: 120000 });
+await shot('7-limit', 9000);
+const limit = await page.evaluate(() => ({
+  card: document.querySelector('.twin-limit')?.textContent ?? '',
+  own: document.querySelectorAll('.twin-turbine .twin-commands li').length,
+  kpi: [...document.querySelectorAll('.twin-kpi')].map((n) => n.textContent).find((t) => t.startsWith('Limited by command')) ?? '',
+}));
+await page.click('.twin-button', { noWaitAfter: true }); // whole site
+await page.click('.twin-tabs button:nth-child(2)', { noWaitAfter: true }); // the commands beside the alarms
+await page.waitForSelector('.twin-alarmfeed .twin-commands li', { timeout: 120000 });
+await shot('8-commands', 9000);
+const feed = await page.evaluate(() => [...document.querySelectorAll('.twin-alarmfeed .twin-commands li')].map((n) => n.textContent));
 
 const counts = await page.evaluate(() => ({
   labels: document.querySelectorAll('.twin-label').length,
@@ -63,6 +82,8 @@ const counts = await page.evaluate(() => ({
   canvas: document.querySelector('.twin-canvas')?.width ?? 0,
 }));
 await browser.close();
-console.log(JSON.stringify({ ...counts, parts, problems }));
+console.log(JSON.stringify({ ...counts, parts, limit, feed, problems }));
 const partsRight = parts.labels.length === 11 && parts.rows === 11 && parts.opened === 'WT-07' && parts.labels.includes('GBX:2');
-if (problems.length > 0 || counts.labels !== 15 || counts.fleet !== 12 || counts.canvas === 0 || !partsRight) process.exit(1);
+const limitRight = limit.card.includes('Limited: 1,260 kW') && limit.card.includes('Asked by operations agent') && limit.own === 1 && limit.kpi.includes('1of 12')
+  && feed.length === 1 && feed[0].includes('WT-03') && feed[0].includes('in force');
+if (problems.length > 0 || counts.labels !== 15 || counts.fleet !== 12 || counts.canvas === 0 || !partsRight || !limitRight) process.exit(1);

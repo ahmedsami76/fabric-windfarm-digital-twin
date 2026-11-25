@@ -9,6 +9,8 @@ __pycache__/
 build/
 # rendered files and secrets
 edge/dataflows/rendered/
+# definitions of the operations agent saved before a change (infra/09-remediation-agent.sh)
+fabric/operations-agent/saved/
 *.pem
 ca.crt
 .DS_Store

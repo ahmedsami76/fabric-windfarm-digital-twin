@@ -133,7 +133,7 @@ Several faults can run at once, on the same turbine or on different ones.
 
 ## Operating commands
 
-These are the actions a control room has. In Phase 5 the operations agent sends them from the cloud after approval.
+These are the actions a control room has. In Phase 5 one of them comes from the cloud: the operations agent proposes a curtailment, and after a person approves it in Teams the command arrives here ([13-deployment-guide-phase5b.md](13-deployment-guide-phase5b.md)).
 
 ```bash
 sim curtail WT-07 --percent 30 --duration 30m   # limit power

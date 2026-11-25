@@ -1,4 +1,5 @@
-"""Phase 5a: the command a notebook writes in Fabric is one the simulator's control topic accepts."""
+"""Phase 5: the command a notebook writes in Fabric is one the simulator's control topic accepts (5a), and
+the curtailment the operations agent proposes relieves the gearbox it is proposed for (5b)."""
 from __future__ import annotations
 
 import importlib.util
@@ -6,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +26,7 @@ def _load(name: str, path: Path):
 
 
 edge = _load("edge_command", ROOT / "tools" / "edge_command.py")
+remediation = _load("remediation_spec", ROOT / "tools" / "remediation_spec.py")
 NOTEBOOK = ROOT / "fabric" / "notebooks" / "12_send_edge_command.ipynb"
 NOW = datetime(2026, 11, 23, 16, 0, 0, tzinfo=timezone.utc)
 
@@ -40,13 +43,12 @@ def test_notebook_is_current_and_its_cells_compile():
     assert subprocess.run([sys.executable, str(ROOT / "tools" / "build-phase5.py"), "--check"], capture_output=True).returncode == 0
     code = [c for c in cells() if c["cell_type"] == "code"]
     for cell in code:
-        text = "\n".join(line for line in source(cell).split("\n") if not line.startswith("%pip"))
-        compile(text, "cell", "exec")
-    # %pip restarts the interpreter: it must come before the cell whose values a caller sets.
-    kinds = ["pip" if source(c).startswith("%pip") else "parameters" if "parameters" in c["metadata"].get("tags", []) else "other" for c in code]
-    assert kinds[:2] == ["pip", "parameters"], kinds
-    assert kinds.count("parameters") == 1
-    assert re.fullmatch(r"%pip install -q azure-eventhub==\d+\.\d+\.\d+ websocket-client==\d+\.\d+\.\d+", source(code[0]))
+        compile(source(cell), "cell", "exec")
+        # No magic and no shell line: "%pip magic command is disabled" is what a notebook answers when it
+        # runs as a job, and the action of the operations agent runs this notebook as a job.
+        assert not [line for line in source(cell).split("\n") if line.startswith(("%", "!"))], source(cell)[:80]
+    kinds = ["parameters" if "parameters" in c["metadata"].get("tags", []) else "other" for c in code]
+    assert kinds[0] == "parameters" and kinds.count("parameters") == 1, kinds
 
 
 def test_notebook_carries_the_tested_code_and_keeps_no_key():
@@ -164,7 +166,6 @@ def test_the_script_and_the_data_flow_name_the_topic_the_simulator_listens_on(ma
 def test_the_cells_run_in_order_against_a_pretend_fabric(monkeypatch, capsys):
     """Every code cell executed top to bottom in one namespace, with stand-ins for the three things only
     Fabric has: the notebook utilities, the Fabric REST client and the network to the event hub."""
-    import types
 
     sent = []
     asked = []
@@ -227,10 +228,18 @@ def test_the_cells_run_in_order_against_a_pretend_fabric(monkeypatch, capsys):
         monkeypatch.setitem(sys.modules, name, module)
     utils = types.SimpleNamespace(runtime=types.SimpleNamespace(context={"userName": "sami@contoso.example"}))
 
-    namespace = {"notebookutils": utils}
-    for cell in cells():
-        if cell["cell_type"] == "code":
+    def run_all(overrides):
+        """Run all, the way Fabric does it for a caller: its values are set right after the parameter cell."""
+        namespace = {"notebookutils": utils}
+        for cell in cells():
+            if cell["cell_type"] != "code":
+                continue
             exec("\n".join(line for line in source(cell).split("\n") if not line.startswith("%pip")), namespace)
+            if "parameters" in cell["metadata"].get("tags", []):
+                namespace.update(overrides)
+        return namespace
+
+    run_all({"turbine": "WT-07"})
     out = capsys.readouterr().out
     assert asked == ["v1/workspaces/ws-id/eventstreams", "v1/workspaces/ws-id/eventstreams/es-id/topology",
                      "v1/workspaces/ws-id/eventstreams/es-id/sources/src-id/connection"]
@@ -243,12 +252,22 @@ def test_the_cells_run_in_order_against_a_pretend_fabric(monkeypatch, capsys):
 
     # dry_run sends nothing.
     sent.clear()
-    dry = {"notebookutils": utils}
-    for cell in cells():
-        if cell["cell_type"] == "code":
-            text = "\n".join(line for line in source(cell).split("\n") if not line.startswith("%pip"))
-            exec(text.replace("dry_run = False", "dry_run = True"), dry)
+    run_all({"turbine": "WT-07", "dry_run": True})
     assert sent == [] and "nothing was sent" in capsys.readouterr().out
+
+    # As delivered, the notebook names no turbine and sends nothing: a caller that forgets the turbine
+    # must not curtail one that happened to be the default.
+    with pytest.raises(Exception, match="not a turbine") as refused:  # the notebook carries its own copy of the class
+        run_all({})
+    assert type(refused.value).__name__ == "CommandError" and sent == []
+
+    # What the operations agent passes, as text: the action's five parameters.
+    sent.clear()
+    run_all({"command": "curtail", "turbine": "WT-03", "percent": "30", "duration": "60m",
+             "requested_by": "operations agent WindFarmGearboxWatch, approved in Teams"})
+    agent_command = json.loads(sent[0].body)
+    assert (agent_command["turbine"], agent_command["percent"], agent_command["duration"]) == ("WT-03", 30.0, "60m")
+    assert agent_command["requestedBy"].startswith("operations agent")
 
 
 
@@ -309,11 +328,43 @@ def test_dry_run_written_as_text_is_read_as_what_it_says():
     assert 'if command == "curtail"' not in code and "command in (" not in code.split("def from_parameters")[0].split("# The command, checked")[-1]
 
 
-def test_the_install_cell_brings_what_the_transport_needs():
-    """Obstacle A, 24 November: the send over port 443 needs websocket-client, which azure-eventhub does not install."""
-    code = [source(c) for c in cells() if c["cell_type"] == "code"]
-    assert any("TransportType.AmqpOverWebsocket" in text for text in code)
-    assert "websocket-client==" in code[0]
+def test_the_send_cell_brings_what_the_transport_needs_without_a_magic(monkeypatch, tmp_path, capsys):
+    """Obstacle A, 24 November: the send over port 443 needs websocket-client, which azure-eventhub does not
+    install. And a job may not use %pip, so the cell installs with pip as a command, when a library is missing."""
+    send = next(source(c) for c in cells() if c["cell_type"] == "code" and source(c).startswith("# Send."))
+    assert "TransportType.AmqpOverWebsocket" in send
+    assert re.search(r'bring\("websocket", "websocket-client==\d+\.\d+\.\d+"\)', send)
+    assert re.search(r'bring\("azure\.eventhub", "azure-eventhub==\d+\.\d+\.\d+"\)', send)
+    assert send.index('bring("websocket"') < send.index('bring("azure.eventhub"') < send.index("from azure.eventhub import")
+
+    namespace = {"dry_run": True}
+    exec(send, namespace)                      # defines bring(); with dry_run nothing else happens
+    bring = namespace["bring"]
+    assert bring("json", "never-installed==0") is json          # a library that is there is not installed again
+
+    import site
+    user_site = tmp_path / "user-site"
+    ran = []
+
+    def pip(command, **kwargs):
+        ran.append(command)
+        if command[-1] == "broken==1":
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="ERROR: No matching distribution found for broken==1")
+        user_site.mkdir(exist_ok=True)
+        (user_site / "library_of_phase5b.py").write_text("ANSWER = 42\n", encoding="utf-8")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", pip)
+    monkeypatch.setattr(site, "getusersitepackages", lambda: str(user_site))
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    # The folder did not exist when the interpreter started, so it is not on the path: the case of a
+    # runtime whose own folder is read-only, where pip installs for the user.
+    assert bring("library_of_phase5b", "library-of-phase5b==1.0").ANSWER == 42
+    assert ran == [[sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "library-of-phase5b==1.0"]]
+    assert "Installed library-of-phase5b==1.0" in capsys.readouterr().out
+    sys.modules.pop("library_of_phase5b", None)
+    with pytest.raises(SystemExit, match="pip could not install broken==1: ERROR: No matching distribution"):
+        bring("library_that_is_not_there", "broken==1")
 
 
 def test_the_send_gets_as_far_as_the_network_with_the_pinned_libraries():
@@ -330,3 +381,91 @@ def test_the_send_gets_as_far_as_the_network_with_the_pinned_libraries():
             producer.create_batch()
     assert not isinstance(failure.value, ImportError), failure.value
     assert "Please install" not in str(failure.value)
+
+
+# ------------------------------------------------------------------------------------------- Phase 5b
+def _gearbox(sim, tid, seconds):
+    """Mean vibration, oil temperature and power of one turbine over the next `seconds` of simulation."""
+    vib, oil, power = [], [], []
+    for _ in range(seconds):
+        sim.step(1.0)
+        signals = sim.turbines[tid]._signals
+        vib.append(signals["gearboxVibration"]), oil.append(signals["gearboxOilTemp"]), power.append(signals["activePower"])
+    mean = lambda values: sum(values) / len(values)
+    return mean(vib), mean(oil), mean(power), sim.turbines[tid].state
+
+
+@pytest.mark.parametrize("wind", [8.5, 10.0, 11.0, 12.0, 13.0])
+def test_a_curtailment_relieves_a_gearbox_that_runs_rough(make_sim, wind, capsys):
+    """The story of Phase 5b in the simulator: a small fault held on WT-03, then the command the agent proposes.
+    The curtailment has to show in the symptom, or approving it would change nothing a person can see."""
+    bites = wind >= 10.0  # below that the turbine delivers less than the limit of 1260 kW anyway
+    sim = make_sim(wind=wind)
+    run(sim, 300)
+    assert sim.handle_command({"command": "inject", "turbine": "WT-03", "kind": "gearbox_degradation", "severity": 0.2, "hold": True}, channel="sim")["ok"]
+    run(sim, 900)
+    before = _gearbox(sim, "WT-03", 300)
+    assert before[3] == "RUNNING" and before[0] > 4.0, before
+    warning = sim.turbines["WT-03"].alarms["GBX-OIL-TEMP-HIGH"]
+    warned = warning.active
+    assert sim.handle_command(edge.from_parameters("curtail", "WT-03", percent=30, duration="60m", now=NOW), channel="control")["ok"]
+    run(sim, 900)
+    after = _gearbox(sim, "WT-03", 300)
+    with capsys.disabled():
+        print(f"\n   wind {wind}: before {before[0]:.2f} mm/s, {before[1]:.1f} degC, {before[2]:.0f} kW; curtailed {after[0]:.2f} mm/s, {after[1]:.1f} degC, {after[2]:.0f} kW, {after[3]}")
+    assert after[3] == "CURTAILED" and after[2] <= 0.30 * 4200 + 30
+    if not bites:
+        assert before[2] < 0.30 * 4200 and remediation.cost_per_hour(before[2]) == 0  # nothing to lose, little to gain
+        return
+    assert remediation.cost_per_hour(before[2]) > 15
+    assert after[0] < before[0] - 0.1, (before, after)       # less vibration
+    assert after[1] < before[1] - 3.0, (before, after)       # a cooler gearbox
+    assert after[1] < remediation.ALARM_OIL_TEMP              # back under the controller's alarm level
+    assert after[0] > remediation.EARLY_VIBRATION             # and still past the early warning: relieved, not cured
+    # What a person sees in the twin: at 13 m/s the controller has raised its oil-temperature warning by
+    # now, and it clears by itself once the turbine is limited.
+    if wind >= 13.0:
+        assert warned
+    assert not warning.active
+    assert any(a.kind == "gearbox_degradation" for a in sim.anomalies if a.turbine_id == "WT-03")  # relieved, not cured
+
+
+def test_the_figures_of_the_decision_are_those_of_the_reference_data():
+    f = remediation.facts()
+    assert f == {"ratedPowerKw": 4200.0, "limitKw": 1260.0, "priceUsdPerMwh": 38.5, "exchangeUsd": 385000, "leadTimeDays": 140, "warrantyEnd": "2026-12-31"}
+    kql = (ROOT / "fabric" / "kql" / "06-remediation-readiness.kql").read_text(encoding="utf-8")
+    for line in ("let RatedPowerKw = 4200.0;", "let CurtailPercent = 30;", "let PriceUsdPerMwh = 38.5;", "let ExchangeUsd = long(385000);",
+                 "let LeadTimeDays = 140;", "let WarrantyEnd = datetime(2026-12-31);"):
+        assert line in kql, line
+    # The arithmetic of the table, in Python: 3,090 kW at 12 m/s loses 1,830 kW, which is 70 USD an hour.
+    assert remediation.cost_per_hour(3090) == 70 and remediation.cost_per_hour(1260) == 0 and remediation.cost_per_hour(900) == 0
+    assert remediation.cost_per_hour(4200) == 113
+    # The thresholds are the ones the Phase 3 agent and the twin use.
+    spec = _load("agent_spec", ROOT / "tools" / "agent_spec.py")
+    assert (remediation.EARLY_VIBRATION, remediation.ALARM_VIBRATION, remediation.EARLY_OIL_TEMP) == (spec.EARLY_VIBRATION, spec.ALARM_VIBRATION, spec.EARLY_OIL_TEMP)
+
+
+def test_the_agent_is_told_only_of_columns_that_exist_and_of_parameters_the_notebook_has():
+    """Phase 3, obstacle 6: the playbook is not generated when the instructions name something that is no column."""
+    columns = {name for name, _, _ in remediation.COLUMNS}
+    setup = (ROOT / "fabric" / "operations-agent" / "phase5b-agent-setup.txt").read_text(encoding="utf-8")
+    quoted = set(re.findall(r"'([A-Za-z][A-Za-z0-9]+)'", setup))
+    names = {q for q in quoted if q[0].isupper() and q not in (remediation.TABLE,)}
+    assert names and names <= columns, names - columns
+    assert f"'{remediation.TABLE}'" in setup and "crosses above 4 mm/s" in setup and "is above" not in setup.lower()
+    kql = (ROOT / "fabric" / "kql" / "06-remediation-readiness.kql").read_text(encoding="utf-8")
+    for name in columns:
+        assert f"{name}:" in kql and name in kql.split("| project ")[1].split("\n")[0], name
+    # The parameters of the action are variables of the notebook's parameter cell, and the instructions use them.
+    parameter_cell = next(source(c) for c in cells() if "parameters" in c["metadata"].get("tags", []))
+    assigned = set(re.findall(r"^([a-zA-Z_]+) = ", parameter_cell, flags=re.M))
+    for name, _ in remediation.PARAMETERS:
+        assert name in assigned, name
+    for name in ("turbine", "percent", "duration"):
+        assert f"as '{name}'" in setup, name
+    action = (ROOT / "fabric" / "operations-agent" / "phase5b-action.txt").read_text(encoding="utf-8")
+    assert remediation.ACTION_NAME in action and f"'{remediation.ACTION_NAME}'" in setup and remediation.NOTEBOOK in action
+    # What the agent is told to pass is a command the notebook accepts and the simulator applies.
+    cmd = edge.from_parameters("curtail", "WT-03", percent=str(remediation.CURTAIL_PERCENT), duration=remediation.CURTAIL_DURATION, now=NOW)
+    assert cmd["percent"] == 30.0 and cmd["duration"] == "60m"
+

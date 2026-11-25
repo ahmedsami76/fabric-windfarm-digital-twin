@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Scenario tests for infra/vm.sh, infra/01-create-edge-vm.sh, infra/99-cleanup.sh, app/create-app.sh,
-# app/create-principal.sh, tools/check-scripts.sh and the checks on where a script runs. Nothing here touches Azure or a VM: the commands az, ssh, scp, curl and a
+# app/create-principal.sh, infra/08-create-command-path.sh, infra/09-remediation-agent.sh,
+# tools/check-scripts.sh and the checks on where a script runs. Nothing here touches Azure or a VM: the commands az, ssh, scp, curl and a
 # few others are replaced by the stand-ins in tools/script-tests/stubs, which answer from
 # files in a scratch folder and log every call.
 #   bash tools/script-tests/run.sh
@@ -533,5 +534,45 @@ check "command path, the workspace is not visible to the sign-in: stops and name
 cp_reset; cp_run --delete
 check "command path, unknown option: refuses" 1 "Unknown option --delete" "!az rest"
 rm -rf "$REPO/edge/dataflows/rendered"
+
+# ---- infra/09-remediation-agent.sh: the operations agent's instructions and action (Phase 5b). Here: its
+# options, who may run it, and that the token stays out of sight. What it does with the Fabric API is tested
+# against a stand-in that speaks HTTP, in simulator/tests/test_phase5b.py. FABRIC_API points to a port
+# where nothing listens, so no scenario can reach Fabric.
+chmod +x "$HERE"/stubs-agent/*
+ra_reset() { reset; echo user > "$STUB_DIR/signed_in_as"; }
+ra_run() { OUT="$(PATH="$HERE/stubs-agent:$PATH" FABRIC_API="http://127.0.0.1:9/v1" AGENT_SAVE_DIR="$SCRATCH/saved" bash "$REPO"/infra/09-remediation-agent.sh "$@" 2>&1)"; RC=$?; }
+
+ra_reset; ra_run
+check "agent, the Fabric API cannot be reached: says so, points to the way by hand, shows no token" 3 \
+  "Phase 5b instructions and the action" "ERROR: Could not reach the Fabric API at http://127.0.0.1:9/v1" "Do it by hand instead: step 3 of docs/13-deployment-guide-phase5b.md" \
+  "account get-access-token --resource https://api.fabric.microsoft.com --query accessToken --output tsv" "!S3cret"
+
+ra_reset; ra_run --show
+check "agent --show, the Fabric API cannot be reached: says so, and does not speak of doing it by hand" 3 "how it is set up" "Could not reach the Fabric API" "!by hand" "!S3cret"
+
+ra_reset; ra_run --rehearse WT-07
+check "agent --rehearse WT-07: the turbine reaches the tool" 3 "Rehearsal: notebook 12_send_edge_command as a job, for WT-07" "Could not reach the Fabric API" "!S3cret"
+
+ra_reset; ra_run --rehearse
+check "agent --rehearse without a turbine: asks for it, asks for no token" 1 "Name the turbine: bash infra/09-remediation-agent.sh --rehearse WT-07" "!get-access-token"
+
+ra_reset; ra_run --restore
+check "agent --restore without a file: asks for it" 1 "Name the file: bash infra/09-remediation-agent.sh --restore" "!get-access-token"
+
+ra_reset; ra_run --restore "$SCRATCH/nothing.json"
+check "agent --restore with a file that is not there: says where the saved ones are" 1 "No file .*nothing.json" "fabric/operations-agent/saved/" "!get-access-token"
+
+ra_reset; ra_run --delete
+check "agent, unknown option: refuses" 1 "Unknown option --delete. Use no option, --show, --rehearse TURBINE or --restore FILE." "!az account"
+
+ra_reset; : > "$STUB_DIR/signed_in_as"; ra_run
+check "agent, the Azure CLI is not signed in: says how to sign in" 1 "The Azure CLI is not signed in. Run: az login" "!get-access-token"
+
+ra_reset; echo servicePrincipal > "$STUB_DIR/signed_in_as"; ra_run
+check "agent, signed in as a service principal: refuses, because Fabric takes these calls from a user only" 1 "signed in as a servicePrincipal, not as you" "!get-access-token"
+
+ra_reset; touch "$STUB_DIR/token_refused"; ra_run
+check "agent, no token for the Fabric API: says what the sign-in said" 1 "The Azure CLI gave no token for the Fabric API: .*AADSTS50076" "az login"
 
 echo; echo "passed $pass, failed $fail"; [[ $fail -eq 0 ]]

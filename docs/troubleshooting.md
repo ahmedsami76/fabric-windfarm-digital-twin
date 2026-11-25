@@ -486,3 +486,13 @@ The table "If something fails" at the end of [09-deployment-guide-phase3.md](09-
 ## Phase 4
 
 The table "If something fails" at the end of [11-deployment-guide-phase4.md](11-deployment-guide-phase4.md) covers the creation of the app, the sign-in from WSL, the deployment and the app itself. Before anything else, open the connection check in the app (select the badge at the top right) and read its six lines: each names one thing the app needs from Fabric and says what Fabric answered.
+
+## Phase 5
+
+Each of the two guides ends with a table "If something fails" that follows the command along its way, hop by hop: [12-deployment-guide-phase5a.md](12-deployment-guide-phase5a.md) from the notebook to the turbine, [13-deployment-guide-phase5b.md](13-deployment-guide-phase5b.md) from the table the agent watches to the approval. Three commands say where things stand without changing anything:
+
+- `bash infra/08-create-command-path.sh --show`: the eventstream, what the edge reads from, the endpoint and the data flow.
+- `bash infra/09-remediation-agent.sh --show`: the operations agent as Fabric has it, its instructions, its action and the action's values, and what differs from Phase 5b.
+- `bash infra/vm.sh ssh bash ./edge/scripts/simctl.sh status`: the turbines, their states and the active faults, on the edge.
+
+When an approved action changes nothing, run `bash infra/09-remediation-agent.sh --rehearse WT-07`. It runs the action's notebook as a job without the agent. If the turbine follows, the fault is on the agent's side of the approval; if not, on the notebook's.

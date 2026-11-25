@@ -1,6 +1,6 @@
 # Roadmap
 
-Phases 1 to 4 are in this repository and have been deployed. Phase 5 is delivered in three steps: 5a has run, 5b is built and has not run, 5c is planned. Its section below says what was planned, what was built differently and why, and what is still to be proven; the sections on Phases 2 to 4 say what each delivered and what it left open. Product facts were checked against the Microsoft Fabric documentation in November 2026; several of these features are in preview and may change.
+Phases 1 to 4 are in this repository and have been deployed. Phase 5 is planned below, with what it delivers, what it depends on and what is still to be proven; the sections on Phases 2 to 4 say what each delivered and what it left open. Product facts were checked against the Microsoft Fabric documentation in November 2026; several of these features are in preview and may change.
 
 | Phase | Delivers | State |
 |---|---|---|
@@ -8,7 +8,7 @@ Phases 1 to 4 are in this repository and have been deployed. Phase 5 is delivere
 | 2. Prepare and model | Enriched tables and KQL views, semantic model | Delivered; deployed on 20 November 2026 |
 | 3. Ontology and agents | Data agent with a test, ontology, operations agent that detects the fault | Delivered; deployed on 21 November 2026 |
 | 4. Rayfin app | 3D digital twin with live data, an exploded view of each turbine and chat | Delivered; deployed on 23 November 2026. Both routes for the live values worked |
-| 5. Remediation with approval | Operations agent proposes a fix, an engineer approves, the edge applies it | In three steps. 5a, the command path from Fabric to the edge, was built on 23 November 2026 and reported as working on 24 November ([12-deployment-guide-phase5a.md](12-deployment-guide-phase5a.md)). 5b, the approval, was built on 24 November and has not run yet ([13-deployment-guide-phase5b.md](13-deployment-guide-phase5b.md)). 5c, the confirmation and the record, is planned |
+| 5. Remediation with approval | Operations agent proposes a fix, an engineer approves, the edge applies it | In three steps. 5a, the command path from Fabric to the edge, was built on 23 November 2026 and has not run yet ([12-deployment-guide-phase5a.md](12-deployment-guide-phase5a.md)). 5b the approval and 5c the confirmation are planned |
 
 ## Phase 2: Prepare and model
 
@@ -86,7 +86,7 @@ Phases 1 to 4 are in this repository and have been deployed. Phase 5 is delivere
 
 ## Phase 5: Remediation with approval
 
-**Delivers** (the plan of 23 November; "5b as built" below says where the built thing differs)
+**Delivers**
 
 - The fault is injected with `--hold`, so it stays until something is done about it.
 - The operations agent gathers the evidence that SOP-GBX-001 asks for, proposes an action (for example, curtail WT-07 to 30% for 15 minutes) and sends it to the on-call engineer in Teams with the cost of acting and of not acting. The cost comes from the data: the forecast and the contract price for the energy, the precedent on WT-02 for the repair.
@@ -105,18 +105,7 @@ Phases 1 to 4 are in this repository and have been deployed. Phase 5 is delivere
 
 **5a as built (23 November 2026).** `infra/08-create-command-path.sh` creates the eventstream `WindFarmCommands` from a definition, reads its connection from the Fabric API and creates the endpoint and the data flow with the Azure CLI, which turned out to accept a Kafka source; no manifest is applied on the VM. Notebook `12_send_edge_command` builds one command, checks it and writes it to the eventstream. The simulator needed no change.
 
-**To be proven by its first run.** That Fabric accepts the eventstream definition; that the service takes a Kafka-source data flow from the CLI; that the message arrives on the control topic as the JSON that was written; that a notebook may write to the event hub behind the eventstream. On 24 November the run was reported as working, after one correction (a library the send needs); no output was sent, so the four count as reported.
-
-**5b as built (24 November 2026).** Four things differ from the plan above.
-
-- **The wind.** The plan was to show the approval in the story of Phase 3, at 7 to 9 m/s. Measured first: at 8.5 m/s the turbine delivers less than the limit of 30 percent, and the curtailment changes nothing. The approval is shown at 13 m/s, where the limit costs about 90 to 110 USD an hour and takes the gearbox oil from about 80 °C back to 74 °C. In that wind the controller's own warning comes about when the agent's message does, so the story is no longer "the agent is earlier": it is "the controller warns and waits until it must derate; a person with the cost in front of them need not wait".
-- **The cost figures.** They stand in a table, `GearboxDecisionLive`, next to the reading that triggers the rule, filled by an update policy from the reference data: the contract price, the rated power, the price and lead time of a gearbox, the end of the warranty. The agent reads them and computes nothing. The forecast is not used: the cost is that of the present hour. The precedent on WT-02 is not written into the agent's instructions; the data agent answers it from the history when asked.
-- **The action.** It is the notebook of 5a, with four values and without the command, so that it can limit a turbine and cannot stop one. The notebook lost its `%pip` cell, which a job may not use, and its default turbine.
-- **How the agent is changed.** Through the published definition of an operations agent and its API, by `infra/09-remediation-agent.sh`, which saves the definition first and can put it back. By hand in the portal as the second way. The fault is injected with a duration of an hour, not with `--hold`, so that a demo leaves nothing behind.
-
-**To be proven by the first run of 5b.** The update policy on the tenant; that a job's values reach the notebook and that it installs its libraries in a job; that Fabric accepts the changed definition; that the playbook has the one rule and carries the action; that the agent passes the turbine of the row and leads with the cost; and how long each part takes. [phase5-validation-log.md](phase5-validation-log.md) has the findings so far.
-
-**5c, as it looks from here.** The agent or a query confirms from telemetry that the setpoint took effect; a row in a table records the proposal, the approval and the effect, with who approved; the twin shows a requested, a confirmed and an ended curtailment; and something watches a case that is still open when the hour ends, which the rule of 5b does not.
+**To be proven by its first run.** That Fabric accepts the eventstream definition; that the service takes a Kafka-source data flow from the CLI; that the message arrives on the control topic as the JSON that was written; that a notebook may write to the event hub behind the eventstream. [phase5-validation-log.md](phase5-validation-log.md) has the findings so far.
 
 ## Further options
 

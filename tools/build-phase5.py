@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-"""Builds the generated files of Phase 5.
+"""Builds the notebook of Phase 5a from tools/edge_command.py.
 
-    python3 tools/build-phase5.py            write them
-    python3 tools/build-phase5.py --check    exit 1 if one is out of date
-
-5a: fabric/notebooks/12_send_edge_command.ipynb, from tools/edge_command.py.
-5b: fabric/kql/06-remediation-readiness.kql and the two texts for the operations agent under
-    fabric/operations-agent/, from tools/remediation_spec.py and data/reference.
+    python3 tools/build-phase5.py            write fabric/notebooks/12_send_edge_command.ipynb
+    python3 tools/build-phase5.py --check    exit 1 if the file is out of date
 
 The notebook carries a copy of tools/edge_command.py, so the code that builds a command in Fabric is
 the code the tests hand to the simulator.
@@ -26,26 +22,23 @@ EVENTHUB_PIN = "azure-eventhub==5.15.1"
 WEBSOCKET_PIN = "websocket-client==1.9.2"
 EVENTSTREAM = "WindFarmCommands"
 
-# (kind, source, tags). The cell tagged "parameters" is the one a job, a pipeline or the operations
-# agent overrides.
-#
-# There is no %pip cell. The magic is switched off when a notebook runs as a job ("%pip magic command
-# is disabled"), and the action of the operations agent runs it as a job. The send cell installs the two
-# libraries with pip as a plain command, and only when the session does not have them.
+# (kind, source, tags). The cell tagged "parameters" is the one a pipeline or the operations agent
+# overrides. It stands below the %pip cell on purpose: %pip restarts the interpreter, and what was
+# defined above it is gone afterwards (obstacle 3 of Phase 2).
 CELLS = [
     ("markdown", f"""# 12 Send a command to the edge
 
-Phase 5. Sends **one operating command** to a turbine of Northwind Ridge: it writes the command to the eventstream `{EVENTSTREAM}`, from where a data flow of Azure IoT Operations carries it to the control topic on the edge.
+Phase 5a. Sends **one operating command** to a turbine of Northwind Ridge: it writes the command to the eventstream `{EVENTSTREAM}`, from where a data flow of Azure IoT Operations carries it to the control topic on the edge.
 
 - The control topic takes five commands: `curtail`, `release`, `stop`, `start`, `reset`. It cannot inject a fault.
-- By hand: set the values in the first code cell, `turbine` first, then **Run all**. With `dry_run = True` the notebook builds and shows the command and sends nothing.
-- As a job: the operations agent of Phase 5b runs this notebook as its action `Curtail turbine` and sets `turbine`, `percent`, `duration` and `requested_by`. A run that names no turbine is refused.
+- Set the values in the third cell, then **Run all**. With `dry_run = True` the notebook builds and shows the command and sends nothing.
 - Before the first run: `bash infra/08-create-command-path.sh` on the workstation (guide: `docs/12-deployment-guide-phase5a.md`).
 
 The notebook reads where to write from the Fabric API each time it runs. No key is kept in it.""", ()),
-    ("code", f"""# Parameters. A job, a pipeline or the operations agent can set these (this is the parameter cell).
+    ("code", f"%pip install -q {EVENTHUB_PIN} {WEBSOCKET_PIN}", ()),
+    ("code", f"""# Parameters. A pipeline or the operations agent can set these (this is the parameter cell).
 command = "curtail"        # curtail, release, stop, start, reset
-turbine = ""               # WT-01 to WT-12, or the word all. Empty on purpose: a command names its turbine
+turbine = "WT-07"          # WT-01 to WT-12, or the word all
 percent = 30               # curtail only: the share of rated power the turbine may still produce
 duration = "10m"           # curtail and stop: for example 90s, 10m, 1h
 reason = ""                # stop: operator or maintenance; otherwise a note that travels with the command
@@ -53,7 +46,7 @@ requested_by = ""          # who asked for it; empty means the user who runs the
 dry_run = False            # True: build and show the command, send nothing
 EVENTSTREAM = "{EVENTSTREAM}\"""", ("parameters",)),
     ("code", GENERATED + "\n__MODULE__", ()),
-    ("code", """# The command, checked before anything is installed or sent.
+    ("code", """# The command, checked before anything is sent.
 if not requested_by:
     try:
         requested_by = notebookutils.runtime.context.get("userName") or ""
@@ -86,35 +79,14 @@ if not source_id:
 settings = send_settings(ask(f"v1/workspaces/{workspace_id}/eventstreams/{eventstream_id}/sources/{source_id}/connection"))
 print(f"Eventstream {EVENTSTREAM} ({eventstream_id})")
 print(f"Writes to {settings['namespace']}, event hub {settings['eventHub']}")""", ()),
-    ("code", f"""# Send. One event, over port 443.
-def bring(module, pin):
-    \"\"\"Import a library, and install it first when this session does not have it.
-
-    pip runs as a plain command here, not as the %pip magic: the magic is switched off when a notebook
-    runs as a job, which is how the operations agent runs this one.\"\"\"
-    import importlib, site, subprocess, sys
-    try:
-        return importlib.import_module(module)
-    except ImportError:
-        done = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", pin],
-                              capture_output=True, text=True)
-        if done.returncode != 0:
-            raise SystemExit(f"pip could not install {{pin}}: {{(done.stderr or done.stdout)[-600:]}}")
-        if site.getusersitepackages() not in sys.path:   # where pip installs when the runtime's own folder is read-only
-            sys.path.append(site.getusersitepackages())
-        importlib.invalidate_caches()
-        print(f"Installed {{pin}} for this session.")
-        return importlib.import_module(module)
-
-
+    ("code", """# Send. One event, over port 443.
 if dry_run:
     print("dry_run is True: nothing was sent.")
 else:
-    bring("websocket", "{WEBSOCKET_PIN}")   # the transport over port 443; azure-eventhub does not bring it
-    bring("azure.eventhub", "{EVENTHUB_PIN}")
+    import websocket  # the library of the transport; named here so that a missing install says so in one line
     from azure.eventhub import EventData, EventHubProducerClient, TransportType
 
-    extra = {{}} if "EntityPath=" in settings["connectionString"] else {{"eventhub_name": settings["eventHub"]}}
+    extra = {} if "EntityPath=" in settings["connectionString"] else {"eventhub_name": settings["eventHub"]}
     producer = EventHubProducerClient.from_connection_string(
         settings["connectionString"], transport_type=TransportType.AmqpOverWebsocket, **extra)
     with producer:
@@ -123,7 +95,7 @@ else:
         batch = producer.create_batch()
         batch.add(event)
         producer.send_batch(batch)
-    print(f"Sent: {{cmd['command']}} for {{cmd['turbine']}}, request {{cmd['requestId']}}, at {{cmd['issuedAt']}} UTC.")
+    print(f"Sent: {cmd['command']} for {cmd['turbine']}, request {cmd['requestId']}, at {cmd['issuedAt']} UTC.")
     print("The turbine should follow within a minute. Check with the query in the next cell.")""", ()),
     ("markdown", """## Check
 
@@ -169,26 +141,17 @@ def render() -> str:
     return json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
 
 
-def outputs() -> dict:
-    sys.path.insert(0, str(ROOT / "tools"))
-    import remediation_spec
-
-    files = {ROOT / "fabric" / "notebooks" / "12_send_edge_command.ipynb": render()}
-    files.update({ROOT / rel: make() for rel, make in remediation_spec.OUTPUTS.items()})
-    return files
-
-
 def main(argv) -> int:
-    stale = 0
-    for path, text in outputs().items():
-        if "--check" in argv:
-            if not path.is_file() or path.read_text(encoding="utf-8") != text:
-                print(f"out of date: {path.relative_to(ROOT)}. Run: python3 tools/build-phase5.py", file=sys.stderr)
-                stale = 1
-            continue
-        path.write_text(text, encoding="utf-8")
-        print(f"wrote {path.relative_to(ROOT)}")
-    return stale
+    path = ROOT / "fabric" / "notebooks" / "12_send_edge_command.ipynb"
+    text = render()
+    if "--check" in argv:
+        if not path.is_file() or path.read_text(encoding="utf-8") != text:
+            print(f"out of date: {path.relative_to(ROOT)}. Run: python3 tools/build-phase5.py", file=sys.stderr)
+            return 1
+        return 0
+    path.write_text(text, encoding="utf-8")
+    print(f"wrote {path.relative_to(ROOT)}")
+    return 0
 
 
 if __name__ == "__main__":
